@@ -1,0 +1,25 @@
+# DNS Scanner Python TUI - Requirements
+# Install with: pip install -r requirements.txt
+
+# TUI Framework
+textual>=0.47.0
+
+# Async DNS Resolution
+aiodns>=3.1.0
+pycares>=4.3.0
+
+# HTTP Client for Slipstream Proxy Testing (with SOCKS5 support)
+httpx[socks]>=0.25.0
+
+# Fast JSON Serialization
+orjson>=3.9.0
+
+# Advanced Logging
+loguru>=0.7.0
+
+# Clipboard Support
+pyperclip>=1.8.0
+
+# Additional Dependencies (installed automatically with above)
+# rich>=13.0.0  (installed with textual)
+# typing-extensions>=4.0.0

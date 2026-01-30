@@ -102,150 +102,94 @@ These archives include Linux, Windows, and macOS clients in a single download.
 
 ## 🚀 Installation
 
-### 1. Clone the Repository
+### Method 1: Install from PyPI (Recommended)
 
+The easiest way to install PYDNS Scanner:
+
+#### Using pip
+```bash
+pip install pydns-scanner
+```
+
+#### Using uv (Faster)
+```bash
+uv pip install pydns-scanner
+```
+
+#### Using Mirror (For Users with Limited Access to PyPI)
+```bash
+# Runflare Mirror
+pip install pydns-scanner -i https://mirror-pypi.runflare.com/simple/ --trusted-host mirror-pypi.runflare.com
+
+# Or Alibaba Cloud Mirror
+pip install pydns-scanner -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+
+# Or TUNA Mirror
+pip install pydns-scanner -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+#### Run after installation
+```bash
+pydns-scanner
+```
+
+---
+
+### Method 2: Run from Source (Manual)
+
+If you want to run the code directly from the repository:
+
+#### Step 1: Clone the Repository
 ```bash
 git clone https://github.com/xullexer/PYDNS-Scanner.git
-cd PYDNS-Scanner/python
+cd PYDNS-Scanner
 ```
 
-### 2. Install Python Dependencies
+#### Step 2: Install Dependencies
 
-#### Option A: Using uv (Recommended - Fast!)
-
-[uv](https://github.com/astral-sh/uv) is an extremely fast Python package installer and resolver, written in Rust.
-
+**Using uv (Recommended - Fast!)**
 ```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Install dependencies with uv
 uv pip install -r requirements.txt
-
-# Or install directly
-uv pip install textual aiodns httpx orjson loguru pyperclip
 ```
 
-#### Option B: Using pip with requirements file
+**Using pip**
 ```bash
 pip install -r requirements.txt
 ```
 
-#### Option C: Using pip directly
+**Using Mirror (For Users with Limited Access to PyPI)**
 ```bash
-pip install textual aiodns httpx[socks] orjson loguru pyperclip
-```
-
-#### Option D: Using Alternative Mirrors (For Users with Limited Access to PyPI)
-
-If you have restricted access to PyPI, use one of these mirrors that have all required packages:
-
-**Option 1: Runflare Mirror** (Tested ✅)
-```bash
+# Runflare Mirror
 pip install -r requirements.txt -i https://mirror-pypi.runflare.com/simple/ --trusted-host mirror-pypi.runflare.com
-```
 
-**Option 2: Alibaba Cloud (Aliyun) Mirror** (Tested ✅)
-```bash
+# Or Alibaba Cloud Mirror
 pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
-```
 
-**Option 3: Tsinghua University (TUNA) Mirror** (Tested ✅)
-```bash
+# Or TUNA Mirror
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-**Option 4: USTC Mirror**
+#### Step 3: Run the Application
 ```bash
-pip install -r requirements.txt -i https://pypi.mirrors.ustc.edu.cn/simple
+python -m python
 ```
 
-#### Option E: Using conda
-```bash
-conda create -n pydnsscanner python=3.11
-conda activate pydnsscanner
-pip install -r requirements.txt
-```
+---
 
-#### Option F: Using uv with virtual environment
-```bash
-# Create and activate venv with uv
-uv venv
-source .venv/bin/activate  # On Linux/macOS
-# or
-.venv\Scripts\activate  # On Windows
+## 🎮 Usage
 
-# Install dependencies
-uv pip install -r requirements.txt
-```
-
-### 3. (Optional) Slipstream Auto-Download
-
-**No manual setup required!** When you enable Slipstream testing in the UI for the first time:
-
-1. The application automatically detects your platform (Windows/Linux/macOS and architecture)
-2. Downloads the correct Slipstream client from GitHub
-3. Shows download progress with visual progress bar
-4. Supports resume if download is interrupted (slow/unstable internet)
-5. Retries up to 5 times with exponential backoff
-6. Saves partial downloads for future resume
-
-**Supported Platforms:**
-- ✅ Windows (AMD64)
-- ✅ Linux (x86_64)
-- ✅ macOS Apple Silicon (ARM64)
-- ✅ macOS Intel (x86_64)
-
-**⚠️ Important: Executable Permissions (Linux/macOS)**
-
-The application automatically sets executable permissions when downloading the Slipstream client. However, if you download manually or encounter "Permission denied" errors, you need to set permissions yourself:
-
-```bash
-# Linux
-chmod +x slipstream-client/linux/slipstream-client-linux-amd64
-
-# macOS (Apple Silicon)
-chmod +x slipstream-client/macos/slipstream-client-darwin-arm64
-
-# macOS (Intel)
-chmod +x slipstream-client/macos/slipstream-client-darwin-amd64
-```
-
-**Legacy Support:**
-- Automatically detects existing `slipstream-client.exe` installations
-- No need to re-download if you already have it
-
-**Manual Download (Optional):**
-
-If you prefer to download manually or have network restrictions:
-
-```bash
-# Windows (AMD64)
-mkdir slipstream-client\windows
-# Download: https://github.com/AliRezaBeigy/slipstream-rust-deploy/releases/latest/download/slipstream-client-windows-amd64.exe
-
-# Linux (x86_64)
-mkdir -p slipstream-client/linux
-# Download: https://github.com/AliRezaBeigy/slipstream-rust-deploy/releases/latest/download/slipstream-client-linux-amd64
-chmod +x slipstream-client/linux/slipstream-client-linux-amd64
-
-# macOS (Apple Silicon / ARM64)
-mkdir -p slipstream-client/macos
-# Download: https://github.com/AliRezaBeigy/slipstream-rust-deploy/releases/latest/download/slipstream-client-darwin-arm64
-chmod +x slipstream-client/macos/slipstream-client-darwin-arm64
-
-# macOS (Intel / x86_64)
-mkdir -p slipstream-client/macos
-# Download: https://github.com/AliRezaBeigy/slipstream-rust-deploy/releases/latest/download/slipstream-client-darwin-amd64
-chmod +x slipstream-client/macos/slipstream-client-darwin-amd64
-```
-
-## 💻 Usage
+## 🎮 Usage
 
 ### Basic Usage
 
+**From PyPI:**
 ```bash
-python dnsscanner_tui.py
+pydns-scanner
+```
+
+**From source:**
+```bash
+python -m python
 ```
 
 This will launch the interactive TUI where you can configure:
