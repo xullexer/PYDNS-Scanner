@@ -139,16 +139,28 @@ pip install -r requirements.txt
 pip install textual aiodns httpx[socks] orjson loguru pyperclip
 ```
 
-#### روش D: استفاده از میرور Runflare (برای سرورهای با دسترسی محدود)
+#### روش D: استفاده از میرورهای جایگزین (برای کاربران با دسترسی محدود به PyPI)
 
-اگر در سروری با دسترسی محدود به PyPI هستید، از میرور [Runflare](https://runflare.com/) استفاده کنید:
+اگر دسترسی محدود به PyPI دارید، از یکی از این میرورها که همه پکیج‌های مورد نیاز را دارند استفاده کنید:
 
+**گزینه ۱: میرور Runflare** (تست شده ✅)
 ```bash
-# استفاده از Runflare به عنوان ایندکس pip
-pip install -r requirements.txt -i https://pip.runflare.com/simple/ --trusted-host pip.runflare.com
+pip install -r requirements.txt -i https://mirror-pypi.runflare.com/simple/ --trusted-host mirror-pypi.runflare.com
+```
 
-# یا نصب مستقیم
-pip install textual aiodns httpx[socks] orjson loguru pyperclip -i https://pip.runflare.com/simple/ --trusted-host pip.runflare.com
+**گزینه ۲: میرور Alibaba Cloud (Aliyun)** (تست شده ✅)
+```bash
+pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+```
+
+**گزینه ۳: میرور دانشگاه Tsinghua (TUNA)** (تست شده ✅)
+```bash
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+**گزینه ۴: میرور USTC**
+```bash
+pip install -r requirements.txt -i https://pypi.mirrors.ustc.edu.cn/simple
 ```
 
 #### روش E: استفاده از conda
