@@ -22,6 +22,7 @@ import httpx
 import orjson
 import pyperclip
 from loguru import logger
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
@@ -32,9 +33,23 @@ from textual.widgets._directory_tree import DirEntry
 class PlainDirectoryTree(DirectoryTree):
     """Custom DirectoryTree that uses plain text icons instead of emojis for Linux compatibility."""
     
+    # Override class-level icon constants
     ICON_FOLDER = "[DIR]  "
     ICON_FOLDER_OPEN = "[DIR]  "
     ICON_FILE = "[FILE] "
+    
+    def render_label(self, node, base_style, style):
+        """Override render to ensure plain icons are used."""
+        node_label = node._label
+        icon = self.ICON_FILE
+        
+        if isinstance(node.data, DirEntry):
+            if node.data.is_dir:
+                icon = self.ICON_FOLDER_OPEN if node.is_expanded else self.ICON_FOLDER
+        
+        label = Text(icon, style=base_style + style) if icon else Text()
+        label.append(node_label.plain, base_style + style)
+        return label
 
 # Configure logging (disabled by default)
 logger.remove()  # Remove default handler to disable all logging
