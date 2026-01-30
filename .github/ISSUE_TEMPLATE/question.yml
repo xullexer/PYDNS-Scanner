@@ -2,6 +2,8 @@ name: ❓ Question / Help
 description: Ask a question or get help with usage
 title: "[Question]: "
 labels: ["question"]
+assignees:
+  - xullexer
 body:
   - type: markdown
     attributes:
