@@ -54,9 +54,6 @@ class SlipstreamManager:
         "libssl-3-x64.dll": "https://raw.githubusercontent.com/xullexer/PYDNS-Scanner/main/slipstream-client/windows/libssl-3-x64.dll",
     }
     
-    # GitHub API URL to get latest release info
-    RELEASE_API_URL = "https://api.github.com/repos/AliRezaBeigy/slipstream-rust-deploy/releases/latest"
-    
     # Primary filenames (for new downloads)
     FILENAMES = {
         "Darwin-arm64": "slipstream-client-darwin-arm64",
@@ -180,133 +177,35 @@ class SlipstreamManager:
             logger.error(f"Failed to set executable permissions: {e}")
             return False
     
-    def get_version_file_path(self) -> Path:
-        """Get the path to the version tracking file."""
-        return self.get_platform_dir() / ".slipstream_version"
-    
-    def get_local_version(self) -> Optional[str]:
-        """Get the locally stored version tag."""
-        version_file = self.get_version_file_path()
-        if version_file.exists():
-            try:
-                return version_file.read_text().strip()
-            except Exception:
-                pass
-        return None
-    
-    def save_local_version(self, version: str) -> None:
-        """Save the version tag locally."""
-        try:
-            version_file = self.get_version_file_path()
-            version_file.parent.mkdir(parents=True, exist_ok=True)
-            version_file.write_text(version)
-        except Exception as e:
-            logger.warning(f"Failed to save version: {e}")
-    
-    async def get_latest_version(self) -> Optional[str]:
-        """Fetch the latest release version tag from GitHub API.
-        
-        Returns:
-            Version tag string (e.g., 'v1.0.0') or None if failed.
-        """
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.get(self.RELEASE_API_URL)
-                if response.status_code == 200:
-                    data = response.json()
-                    return data.get("tag_name")
-        except Exception as e:
-            logger.warning(f"Failed to check latest version: {e}")
-        return None
-    
-    async def check_and_update(self, log_callback=None) -> tuple[bool, str]:
-        """Check for updates and download if newer version available.
+    async def ensure_installed(self, log_callback=None) -> tuple[bool, str]:
+        """Ensure slipstream is installed. Download if not present.
         
         Args:
             log_callback: Optional callback(message) for status updates
             
         Returns:
-            Tuple of (update_performed, message)
+            Tuple of (success, message)
         """
         def log(msg):
             if log_callback:
                 log_callback(msg)
             logger.info(msg)
         
-        # Check if installed
-        if not self.is_installed():
-            log("[cyan]Slipstream not installed, downloading...[/cyan]")
-            success = await self.download()
-            if success:
-                latest = await self.get_latest_version()
-                if latest:
-                    self.save_local_version(latest)
-                return (True, "Downloaded successfully")
+        # Check if already installed
+        if self.is_installed():
+            log("[green]✓ Slipstream client found[/green]")
+            return (True, "Already installed")
+        
+        # Not installed, download it
+        log("[cyan]Slipstream client not found, downloading...[/cyan]")
+        success = await self.download()
+        
+        if success:
+            log("[green]✓ Slipstream client downloaded successfully[/green]")
+            return (True, "Downloaded successfully")
+        else:
+            log("[red]✗ Failed to download Slipstream client[/red]")
             return (False, "Download failed")
-        
-        # Get local and remote versions
-        local_version = self.get_local_version()
-        log(f"[dim]Local version: {local_version or 'unknown'}[/dim]")
-        
-        try:
-            latest_version = await self.get_latest_version()
-            if not latest_version:
-                log("[yellow]Could not check for updates, using existing version[/yellow]")
-                return (False, "Update check failed, using existing")
-            
-            log(f"[dim]Latest version: {latest_version}[/dim]")
-            
-            # Compare versions
-            if local_version == latest_version:
-                log("[green]✓ Slipstream is up to date[/green]")
-                return (False, "Already up to date")
-            
-            # New version available - try to update
-            log(f"[cyan]New version available: {latest_version} (current: {local_version or 'unknown'})[/cyan]")
-            log("[cyan]Downloading update...[/cyan]")
-            
-            # Backup old executable
-            exe_path = self.get_executable_path()
-            backup_path = exe_path.with_suffix(exe_path.suffix + ".backup")
-            
-            if exe_path.exists():
-                try:
-                    if backup_path.exists():
-                        backup_path.unlink()
-                    exe_path.rename(backup_path)
-                except Exception as e:
-                    logger.warning(f"Could not backup old version: {e}")
-            
-            # Try to download new version
-            success = await self.download()
-            
-            if success:
-                # Update succeeded
-                self.save_local_version(latest_version)
-                # Remove backup
-                if backup_path.exists():
-                    try:
-                        backup_path.unlink()
-                    except Exception:
-                        pass
-                log(f"[green]✓ Updated to {latest_version}[/green]")
-                return (True, f"Updated to {latest_version}")
-            else:
-                # Update failed - restore backup
-                log("[yellow]Update failed, restoring previous version[/yellow]")
-                if backup_path.exists():
-                    try:
-                        if exe_path.exists():
-                            exe_path.unlink()
-                        backup_path.rename(exe_path)
-                        log("[green]✓ Restored previous version[/green]")
-                    except Exception as e:
-                        log(f"[red]Failed to restore backup: {e}[/red]")
-                return (False, "Update failed, using previous version")
-                
-        except Exception as e:
-            log(f"[yellow]Update check error: {e}, using existing version[/yellow]")
-            return (False, f"Error: {e}")
     
     def get_download_url(self) -> Optional[str]:
         """Get the download URL for current platform."""
@@ -1147,13 +1046,13 @@ class DNSScannerTUI(App):
         self.query_one("#scan-screen").display = True
         
         log_widget.write("[bold cyan]PYDNS Scanner Log[/bold cyan]")
-        log_widget.write("[cyan]Checking Slipstream client version...[/cyan]")
+        log_widget.write("[cyan]Checking Slipstream client...[/cyan]")
         
-        # Check and update slipstream
+        # Ensure slipstream is installed (download only if not present)
         def log_callback(msg):
             log_widget.write(msg)
         
-        updated, message = await self.slipstream_manager.check_and_update(log_callback)
+        success, message = await self.slipstream_manager.ensure_installed(log_callback)
         
         # Verify we have a working slipstream
         if not self.slipstream_manager.is_installed():
