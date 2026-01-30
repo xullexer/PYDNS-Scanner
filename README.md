@@ -558,6 +558,33 @@ Tested performance on various systems:
 - DNS queries are standard UDP/TCP port 53
 - Slipstream proxy testing is optional and disabled by default
 
+## 💝 Support the Project
+
+If you find this project useful, consider supporting its development:
+
+### Cryptocurrency Donations
+
+- **Bitcoin (BTC)**  
+  `bc1qpya0kc2uh0mc08c7nuzrqkpsqjr36mrwscgpxr`
+
+- **Solana (SOL)**  
+  `J1XzZfizQ6mgYiyxpLGWU52kHBF1hm2Tb9AZ5FaRj8tH`
+
+- **Ethereum (ETH)**  
+  `0x26D9924B88e71b5908d957EA4c74C66989c253cb`
+
+- **Binance Smart Chain (BNB/BSC)**  
+  `0x26D9924B88e71b5908d957EA4c74C66989c253cb`
+
+- **Tron (TRX)**  
+  `TYBZFr8WUsjgfrXrqmrdF5EXPXo7QdimA8`
+
+- **Ethereum Base**  
+  `0x26D9924B88e71b5908d957EA4c74C66989c253cb`
+
+- **TON (Telegram Open Network)**  
+  `UQBcI_ZZGQq3fcNzTkL-zszgFR5HpRDLFHYRZffizriiScxJ`
+
 ---
 
 **Happy Scanning! 🚀**
