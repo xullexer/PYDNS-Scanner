@@ -2,6 +2,8 @@ name: 🐛 Bug Report
 description: Report a bug or issue with PYDNS Scanner
 title: "[Bug]: "
 labels: ["bug"]
+assignees:
+  - xullexer
 body:
   - type: markdown
     attributes:
