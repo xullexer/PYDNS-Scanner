@@ -136,16 +136,28 @@ pip install -r requirements.txt
 pip install textual aiodns httpx[socks] orjson loguru pyperclip
 ```
 
-#### Option D: Using Runflare Mirror (For Servers with Limited Access)
+#### Option D: Using Alternative Mirrors (For Users with Limited Access to PyPI)
 
-If you're on a server with restricted access to PyPI, use [Runflare](https://runflare.com/) mirror:
+If you have restricted access to PyPI, use one of these mirrors that have all required packages:
 
+**Option 1: Runflare Mirror** (Tested ✅)
 ```bash
-# Using Runflare as pip index
-pip install -r requirements.txt -i https://pip.runflare.com/simple/ --trusted-host pip.runflare.com
+pip install -r requirements.txt -i https://mirror-pypi.runflare.com/simple/ --trusted-host mirror-pypi.runflare.com
+```
 
-# Or install directly
-pip install textual aiodns httpx[socks] orjson loguru pyperclip -i https://pip.runflare.com/simple/ --trusted-host pip.runflare.com
+**Option 2: Alibaba Cloud (Aliyun) Mirror** (Tested ✅)
+```bash
+pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+```
+
+**Option 3: Tsinghua University (TUNA) Mirror** (Tested ✅)
+```bash
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+**Option 4: USTC Mirror**
+```bash
+pip install -r requirements.txt -i https://pypi.mirrors.ustc.edu.cn/simple
 ```
 
 #### Option E: Using conda
