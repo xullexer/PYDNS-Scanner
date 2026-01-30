@@ -1,10 +1,35 @@
 # PYDNS Scanner
 
-A modern, high-performance DNS scanner with a beautiful Terminal User Interface (TUI) built with Textual. This tool can scan millions of IP addresses to find working DNS servers with optional Slipstream proxy testing and automatic multi-platform client download.
+<br>
+<div align="center">
+  <img
+    src="https://github.com/user-attachments/assets/42a51031-5e8e-40a2-ae02-d77c6105587b"
+    width="720"
+    style="border-radius:12px;"
+  />
+</div>
+<br>
+<br>
+<div align="center">
+  <img src="https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge" alt="Python">
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
+  <img src="https://img.shields.io/badge/Node.js-18%2B-brightgreen?style=for-the-badge" alt="Platform">
+</div>
 
-![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)
+<br>
+
+<div align="center">
+  🇺🇸 <a href="README.md"><b>English</b></a>
+  &nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
+  🇮🇷 <a href="README-FA.md"><b>فارسی</b></a>
+</div>
+
+<br>
+
+<div align="center">
+  <strong>A modern, high-performance DNS scanner with a beautiful Terminal User Interface (TUI) built with Textual.</strong><br>
+  This tool can scan millions of IP addresses to find working DNS servers with optional Slipstream proxy testing and automatic multi-platform client download.
+</div>
 
 ## ✨ Features
 
