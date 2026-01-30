@@ -471,6 +471,4 @@ python dnsscanner_tui.py
 
 ---
 
-**اسکن خوش! 🚀**
-
 </div>
