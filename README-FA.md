@@ -81,6 +81,26 @@ pyperclip>=1.8.0      # پشتیبانی کلیپ‌بورد
     - macOS (Intel): `slipstream-client-darwin-amd64`
   - دانلود دستی از: [انتشارات slipstream-rust-deploy](https://github.com/AliRezaBeigy/slipstream-rust-deploy/releases/latest)
 
+### 📦 کلاینت‌های Slipstream همراه
+
+باینری‌های کامپایل‌شده کلاینت Slipstream برای همه پلتفرم‌ها در پوشه `slipstream-client/` موجود است:
+
+| پلتفرم | مسیر | توضیحات |
+|--------|------|----------|
+| **Linux** | `slipstream-client/linux/slipstream-client-linux-amd64` | باینری لینوکس x86_64 |
+| **Windows** | `slipstream-client/windows/slipstream-client-windows-amd64.exe` | فایل اجرایی ویندوز x86_64 |
+| **macOS ARM** | `slipstream-client/mac/slipstream-client-darwin-arm64` | مک با تراشه اپل سیلیکون (M1/M2/M3) |
+| **macOS Intel** | `slipstream-client/mac/slipstream-client-darwin-amd64` | مک با پردازنده اینتل x86_64 |
+
+#### 📥 آرشیوهای همه‌در‌یک
+
+برای راحتی، آرشیوهای فشرده شامل باینری همه پلتفرم‌ها موجود است:
+
+- **`slipstream-client/slipstream-client-all-platforms.tar.gz`** - بهترین فشرده‌سازی (توصیه شده)
+- **`slipstream-client/slipstream-client-all-platforms.zip`** - فرمت سازگار با ویندوز
+
+این آرشیوها شامل کلاینت‌های لینوکس، ویندوز و مک در یک دانلود هستند.
+
 ## 🚀 نصب
 
 ### ۱. کلون کردن مخزن

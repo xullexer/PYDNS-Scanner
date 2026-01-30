@@ -78,6 +78,26 @@ pyperclip>=1.8.0      # Clipboard support
     - macOS (Intel): `slipstream-client-darwin-amd64`
   - Manual download available from: [slipstream-rust-deploy releases](https://github.com/AliRezaBeigy/slipstream-rust-deploy/releases/latest)
 
+### 📦 Bundled Slipstream Clients
+
+Pre-compiled Slipstream client binaries are included in the `slipstream-client/` folder for all platforms:
+
+| Platform | Path | Description |
+|----------|------|-------------|
+| **Linux** | `slipstream-client/linux/slipstream-client-linux-amd64` | Linux x86_64 binary |
+| **Windows** | `slipstream-client/windows/slipstream-client-windows-amd64.exe` | Windows x86_64 executable |
+| **macOS ARM** | `slipstream-client/mac/slipstream-client-darwin-arm64` | macOS Apple Silicon (M1/M2/M3) |
+| **macOS Intel** | `slipstream-client/mac/slipstream-client-darwin-amd64` | macOS Intel x86_64 |
+
+#### 📥 All-in-One Archives
+
+For convenience, compressed archives containing all platform binaries are available:
+
+- **`slipstream-client/slipstream-client-all-platforms.tar.gz`** - Best compression (recommended)
+- **`slipstream-client/slipstream-client-all-platforms.zip`** - Windows-friendly format
+
+These archives include Linux, Windows, and macOS clients in a single download.
+
 ## 🚀 Installation
 
 ### 1. Clone the Repository
