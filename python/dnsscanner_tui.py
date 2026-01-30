@@ -44,7 +44,7 @@ class PlainDirectoryTree(DirectoryTree):
         icon = self.ICON_FILE
         
         if isinstance(node.data, DirEntry):
-            if node.data.is_dir:
+            if node.data.path.is_dir():
                 icon = self.ICON_FOLDER_OPEN if node.is_expanded else self.ICON_FOLDER
         
         label = Text(icon, style=base_style + style) if icon else Text()
