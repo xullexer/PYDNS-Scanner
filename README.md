@@ -178,8 +178,6 @@ python -m python
 
 ## 🎮 Usage
 
-## 🎮 Usage
-
 ### Basic Usage
 
 **From PyPI:**
