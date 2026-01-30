@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pydns-scanner"
+version = "1.0.4"
+description = "A modern, high-performance DNS scanner with a beautiful Terminal User Interface (TUI)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "xullexer" }
+]
+keywords = [
+    "dns",
+    "scanner",
+    "tui",
+    "terminal",
+    "network",
+    "async",
+    "textual"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: Name Service (DNS)",
+    "Topic :: System :: Networking",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "textual>=0.47.0",
+    "aiodns>=3.1.0",
+    "pycares>=4.3.0",
+    "httpx[socks]>=0.25.0",
+    "orjson>=3.9.0",
+    "loguru>=0.7.0",
+    "pyperclip>=1.8.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/xullexer/PYDNS-Scanner"
+Repository = "https://github.com/xullexer/PYDNS-Scanner"
+Issues = "https://github.com/xullexer/PYDNS-Scanner/issues"
+
+[project.scripts]
+pydns-scanner = "python:main"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/python",
+    "/README.md",
+    "/LICENSE",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["python"]

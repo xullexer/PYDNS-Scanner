@@ -26,6 +26,15 @@ from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Button, DataTable, Footer, Header, Static, RichLog, Input, Label, Checkbox, Select, DirectoryTree
+from textual.widgets._directory_tree import DirEntry
+
+
+class PlainDirectoryTree(DirectoryTree):
+    """Custom DirectoryTree that uses plain text icons instead of emojis for Linux compatibility."""
+    
+    ICON_FOLDER = "[DIR]  "
+    ICON_FOLDER_OPEN = "[DIR]  "
+    ICON_FILE = "[FILE] "
 
 # Configure logging (disabled by default)
 logger.remove()  # Remove default handler to disable all logging
@@ -71,13 +80,13 @@ class SlipstreamManager:
     }
     
     PLATFORM_DIRS = {
-        "Darwin": "macos",
+        "Darwin": "mac",
         "Windows": "windows",
         "Linux": "linux",
     }
     
     def __init__(self):
-        self.base_dir = Path(__file__).parent.parent / "slipstream-client"
+        self.base_dir = Path(__file__).parent / "slipstream-client"
         self.system = platform.system()
         self.machine = platform.machine()
         self._cached_executable_path: Optional[Path] = None
@@ -811,7 +820,7 @@ class DNSScannerTUI(App):
                     yield Button("Browse", id="browse-btn", variant="primary")
                 
                 with Container(id="file-browser-container"):
-                    yield DirectoryTree(".", id="file-browser")
+                    yield PlainDirectoryTree(".", id="file-browser")
                 
                 with Horizontal(classes="form-row"):
                     yield Label("Domain:", classes="form-label")

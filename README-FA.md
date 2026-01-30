@@ -105,125 +105,92 @@ pyperclip>=1.8.0      # پشتیبانی کلیپ‌بورد
 
 ## 🚀 نصب
 
-### ۱. کلون کردن مخزن
+### روش ۱: نصب از PyPI (توصیه شده)
 
+ساده‌ترین روش نصب PYDNS Scanner:
+
+#### استفاده از pip
+```bash
+pip install pydns-scanner
+```
+
+#### استفاده از uv (سریع‌تر)
+```bash
+uv pip install pydns-scanner
+```
+
+#### استفاده از میرور (برای کاربران با دسترسی محدود به PyPI)
+```bash
+# میرور Runflare
+pip install pydns-scanner -i https://mirror-pypi.runflare.com/simple/ --trusted-host mirror-pypi.runflare.com
+
+# یا میرور Alibaba Cloud
+pip install pydns-scanner -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+
+# یا میرور TUNA
+pip install pydns-scanner -i https://pypi.tuna.tsinghua.edu.cn/simple
+```
+
+#### اجرا پس از نصب
+```bash
+pydns-scanner
+```
+
+---
+
+### روش ۲: اجرا از سورس کد (دستی)
+
+اگر می‌خواهید کد را مستقیماً از مخزن اجرا کنید:
+
+#### مرحله ۱: کلون کردن مخزن
 ```bash
 git clone https://github.com/xullexer/PYDNS-Scanner.git
-cd PYDNS-Scanner/python
+cd PYDNS-Scanner
 ```
 
-### ۲. نصب وابستگی‌های پایتون
+#### مرحله ۲: نصب وابستگی‌ها
 
-#### روش A: استفاده از uv (توصیه شده - سریع!)
-
-[uv](https://github.com/astral-sh/uv) یک نصب‌کننده و حل‌کننده بسته پایتون بسیار سریع است که با Rust نوشته شده.
-
+**استفاده از uv (توصیه شده - سریع!)**
 ```bash
-# نصب uv (اگر قبلاً نصب نشده)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# نصب وابستگی‌ها با uv
 uv pip install -r requirements.txt
-
-# یا نصب مستقیم
-uv pip install textual aiodns httpx orjson loguru pyperclip
 ```
 
-#### روش B: استفاده از pip با فایل requirements
+**استفاده از pip**
 ```bash
 pip install -r requirements.txt
 ```
 
-#### روش C: استفاده از pip مستقیم
+**استفاده از میرور (برای کاربران با دسترسی محدود به PyPI)**
 ```bash
-pip install textual aiodns httpx[socks] orjson loguru pyperclip
-```
-
-#### روش D: استفاده از میرورهای جایگزین (برای کاربران با دسترسی محدود به PyPI)
-
-اگر دسترسی محدود به PyPI دارید، از یکی از این میرورها که همه پکیج‌های مورد نیاز را دارند استفاده کنید:
-
-**گزینه ۱: میرور Runflare** (تست شده ✅)
-```bash
+# میرور Runflare
 pip install -r requirements.txt -i https://mirror-pypi.runflare.com/simple/ --trusted-host mirror-pypi.runflare.com
-```
 
-**گزینه ۲: میرور Alibaba Cloud (Aliyun)** (تست شده ✅)
-```bash
+# یا میرور Alibaba Cloud
 pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
-```
 
-**گزینه ۳: میرور دانشگاه Tsinghua (TUNA)** (تست شده ✅)
-```bash
+# یا میرور TUNA
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-**گزینه ۴: میرور USTC**
+#### مرحله ۳: اجرای برنامه
 ```bash
-pip install -r requirements.txt -i https://pypi.mirrors.ustc.edu.cn/simple
+python -m python
 ```
 
-#### روش E: استفاده از conda
-```bash
-conda create -n pydnsscanner python=3.11
-conda activate pydnsscanner
-pip install -r requirements.txt
-```
+---
 
-#### روش F: استفاده از uv با محیط مجازی
-```bash
-# ایجاد و فعال‌سازی venv با uv
-uv venv
-source .venv/bin/activate  # در Linux/macOS
-# یا
-.venv\Scripts\activate  # در Windows
-
-# نصب وابستگی‌ها
-uv pip install -r requirements.txt
-```
-
-### ۳. (اختیاری) دانلود خودکار Slipstream
-
-**نیازی به تنظیم دستی نیست!** وقتی تست Slipstream را برای اولین بار در رابط کاربری فعال می‌کنید:
-
-۱. برنامه به صورت خودکار پلتفرم شما را تشخیص می‌دهد (Windows/Linux/macOS و معماری)
-۲. کلاینت Slipstream مناسب را از GitHub دانلود می‌کند
-۳. پیشرفت دانلود را با نوار پیشرفت نمایش می‌دهد
-۴. در صورت قطع دانلود (اینترنت کند/ناپایدار) از ادامه پشتیبانی می‌کند
-۵. تا ۵ بار با تأخیر نمایی تلاش مجدد می‌کند
-۶. دانلودهای ناقص را برای ادامه بعدی ذخیره می‌کند
-
-**پلتفرم‌های پشتیبانی شده:**
-- ✅ Windows (AMD64)
-- ✅ Linux (x86_64)
-- ✅ macOS Apple Silicon (ARM64)
-- ✅ macOS Intel (x86_64)
-
-**⚠️ مهم: مجوزهای اجرایی (Linux/macOS)**
-
-برنامه به صورت خودکار مجوزهای اجرایی را هنگام دانلود کلاینت Slipstream تنظیم می‌کند. اما اگر به صورت دستی دانلود کردید یا با خطای "Permission denied" مواجه شدید، باید مجوزها را خودتان تنظیم کنید:
-
-```bash
-# Linux
-chmod +x slipstream-client/linux/slipstream-client-linux-amd64
-
-# macOS (Apple Silicon)
-chmod +x slipstream-client/macos/slipstream-client-darwin-arm64
-
-# macOS (Intel)
-chmod +x slipstream-client/macos/slipstream-client-darwin-amd64
-```
-
-**پشتیبانی از نسخه‌های قدیمی:**
-- به صورت خودکار نصب‌های موجود `slipstream-client.exe` را تشخیص می‌دهد
-- نیازی به دانلود مجدد ندارید اگر قبلاً دارید
-
-## 💻 استفاده
+## 🎮 استفاده
 
 ### استفاده پایه
 
+**از PyPI:**
 ```bash
-python dnsscanner_tui.py
+pydns-scanner
+```
+
+**از سورس کد:**
+```bash
+python -m python
 ```
 
 این دستور رابط کاربری TUI تعاملی را راه‌اندازی می‌کند که می‌توانید تنظیم کنید:
