@@ -48,6 +48,12 @@ class SlipstreamManager:
         "Linux": "https://github.com/AliRezaBeigy/slipstream-rust-deploy/releases/latest/download/slipstream-client-linux-amd64",
     }
     
+    # Windows DLL dependencies (required for slipstream-client on Windows)
+    WINDOWS_DLLS = {
+        "libcrypto-3-x64.dll": "https://raw.githubusercontent.com/xullexer/PYDNS-Scanner/main/slipstream-client/windows/libcrypto-3-x64.dll",
+        "libssl-3-x64.dll": "https://raw.githubusercontent.com/xullexer/PYDNS-Scanner/main/slipstream-client/windows/libssl-3-x64.dll",
+    }
+    
     # GitHub API URL to get latest release info
     RELEASE_API_URL = "https://api.github.com/repos/AliRezaBeigy/slipstream-rust-deploy/releases/latest"
     
@@ -390,6 +396,10 @@ class SlipstreamManager:
                     exe_path.chmod(exe_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
                     logger.info(f"Set executable permissions on {exe_path}")
                 
+                # Download Windows DLLs if on Windows
+                if self.system == "Windows":
+                    await self._download_windows_dlls()
+                
                 return True
                 
             except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError, httpx.ConnectError) as e:
@@ -413,6 +423,55 @@ class SlipstreamManager:
                 return False
         
         return False
+    
+    async def _download_windows_dlls(self, log_callback=None) -> bool:
+        """Download required Windows DLL dependencies.
+        
+        Args:
+            log_callback: Optional callback(message) for status updates
+            
+        Returns:
+            True if all DLLs downloaded successfully, False otherwise
+        """
+        if self.system != "Windows":
+            return True
+        
+        platform_dir = self.get_platform_dir()
+        platform_dir.mkdir(parents=True, exist_ok=True)
+        
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+            logger.info(msg)
+        
+        all_success = True
+        for dll_name, dll_url in self.WINDOWS_DLLS.items():
+            dll_path = platform_dir / dll_name
+            
+            # Skip if DLL already exists
+            if dll_path.exists():
+                log(f"[dim]DLL already exists: {dll_name}[/dim]")
+                continue
+            
+            try:
+                log(f"[cyan]Downloading {dll_name}...[/cyan]")
+                async with httpx.AsyncClient(
+                    follow_redirects=True,
+                    timeout=httpx.Timeout(30.0, read=60.0, connect=30.0),
+                    verify=True
+                ) as client:
+                    response = await client.get(dll_url)
+                    response.raise_for_status()
+                    
+                    with open(dll_path, "wb") as f:
+                        f.write(response.content)
+                    
+                    log(f"[green]✓ Downloaded {dll_name}[/green]")
+            except Exception as e:
+                log(f"[red]Failed to download {dll_name}: {e}[/red]")
+                all_success = False
+        
+        return all_success
     
     async def download_with_ui(self, progress_bar, log_widget, max_retries: int = 5, retry_delay: float = 2.0) -> bool:
         """Download slipstream with UI updates for progress bar and log.
@@ -508,6 +567,11 @@ class SlipstreamManager:
                     exe_path.chmod(exe_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
                     log_widget.write("[green]✓ Set executable permissions on slipstream client[/green]")
                 
+                # Download Windows DLLs if on Windows
+                if self.system == "Windows":
+                    log_widget.write("[cyan]Downloading required Windows DLLs...[/cyan]")
+                    await self._download_windows_dlls_with_ui(log_widget)
+                
                 return True
                 
             except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError, httpx.ConnectError) as e:
@@ -532,6 +596,50 @@ class SlipstreamManager:
                 return False
         
         return False
+    
+    async def _download_windows_dlls_with_ui(self, log_widget) -> bool:
+        """Download required Windows DLL dependencies with UI updates.
+        
+        Args:
+            log_widget: RichLog widget to write status messages
+            
+        Returns:
+            True if all DLLs downloaded successfully, False otherwise
+        """
+        if self.system != "Windows":
+            return True
+        
+        platform_dir = self.get_platform_dir()
+        platform_dir.mkdir(parents=True, exist_ok=True)
+        
+        all_success = True
+        for dll_name, dll_url in self.WINDOWS_DLLS.items():
+            dll_path = platform_dir / dll_name
+            
+            # Skip if DLL already exists
+            if dll_path.exists():
+                log_widget.write(f"[dim]DLL already exists: {dll_name}[/dim]")
+                continue
+            
+            try:
+                log_widget.write(f"[cyan]Downloading {dll_name}...[/cyan]")
+                async with httpx.AsyncClient(
+                    follow_redirects=True,
+                    timeout=httpx.Timeout(30.0, read=60.0, connect=30.0),
+                    verify=True
+                ) as client:
+                    response = await client.get(dll_url)
+                    response.raise_for_status()
+                    
+                    with open(dll_path, "wb") as f:
+                        f.write(response.content)
+                    
+                    log_widget.write(f"[green]✓ Downloaded {dll_name}[/green]")
+            except Exception as e:
+                log_widget.write(f"[red]Failed to download {dll_name}: {e}[/red]")
+                all_success = False
+        
+        return all_success
     
     def get_run_command(self, dns_ip: str, port: int, domain: str) -> list:
         """Get the command to run slipstream (same args for all platforms).

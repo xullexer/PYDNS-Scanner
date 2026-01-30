@@ -89,6 +89,8 @@ Pre-compiled Slipstream client binaries are included in the `slipstream-client/`
 | **macOS ARM** | `slipstream-client/mac/slipstream-client-darwin-arm64` | macOS Apple Silicon (M1/M2/M3) |
 | **macOS Intel** | `slipstream-client/mac/slipstream-client-darwin-amd64` | macOS Intel x86_64 |
 
+> **⚠️ Windows Note:** The Windows client requires OpenSSL DLLs (`libcrypto-3-x64.dll` and `libssl-3-x64.dll`) which are included in the `slipstream-client/windows/` folder. When using automatic download, these DLLs are downloaded automatically alongside the Windows executable.
+
 #### 📥 All-in-One Archives
 
 For convenience, compressed archives containing all platform binaries are available:
