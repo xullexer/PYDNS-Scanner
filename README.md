@@ -52,7 +52,7 @@
 
 - 🎨 **Beautiful TUI Interface** - GitHub dark-themed terminal interface
 - ⚡ **High Performance** - Asynchronous scanning with configurable concurrency
-- ⏸️ **Pause/Resume/Shuffle** 
+- ⏸️ **Pause/Resume/Shuffle** - Full scan control
 - 📊 **Real-time Statistics** - Live progress tracking and scan metrics
 - 🔍 **Smart DNS Detection** - Detects working DNS servers even with error responses (NXDOMAIN, NODATA)
 - 🎲 **Random Subdomain Support** - Avoid cached responses with random subdomains
