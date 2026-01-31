@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import ipaddress
+import json
 import mmap
+import os
 import platform
 import secrets
 import stat
@@ -648,68 +651,150 @@ class DNSScannerTUI(App):
     
     CSS = """
     Screen {
-        background: $surface;
+        background: #0d1117;
+    }
+    
+    /* Dark theme colors */
+    Header {
+        background: #161b22;
+        color: #58a6ff;
+    }
+    
+    Footer {
+        background: #161b22;
+        color: #8b949e;
+    }
+    
+    Footer > .footer--key {
+        background: #21262d;
+        color: #58a6ff;
+    }
+    
+    Footer > .footer--description {
+        color: #c9d1d9;
     }
     
     /* Start Screen Styles */
     #start-screen {
         width: 100%;
         height: 100%;
-        align: center middle;
+        background: #0d1117;
+        padding: 1;
     }
     
     #start-form {
-        width: 80;
-        height: auto;
-        border: solid cyan;
+        width: 100%;
+        height: 100%;
+        border: solid #30363d;
+        background: #161b22;
         padding: 2;
-        margin: 2;
     }
     
     #start-title {
         width: 100%;
         text-align: center;
         text-style: bold;
-        color: cyan;
+        color: #58a6ff;
         padding: 1;
     }
     
     .form-row {
         width: 100%;
-        height: 3;
+        height: auto;
+        min-height: 3;
         margin: 1 0;
     }
     
     .form-label {
         width: 20;
         padding: 0 1;
+        color: #c9d1d9;
     }
     
     .form-input {
         width: 1fr;
     }
     
+    Input {
+        background: #21262d;
+        border: solid #30363d;
+        color: #c9d1d9;
+        height: 3;
+    }
+    
+    Input:focus {
+        border: solid #58a6ff;
+    }
+    
     #file-browser-container {
         width: 100%;
         height: 15;
-        border: solid green;
+        border: solid #238636;
+        background: #161b22;
         margin: 1 0;
         display: none;
     }
     
     DirectoryTree {
         height: 100%;
+        background: #161b22;
+        color: #c9d1d9;
+    }
+    
+    DirectoryTree:focus > .directory-tree--folder {
+        color: #58a6ff;
     }
     
     Select {
         width: 1fr;
+        background: #21262d;
+        border: solid #30363d;
+    }
+    
+    Select.-expanded {
+        height: auto;
+    }
+    
+    SelectCurrent {
+        background: #21262d;
+        color: #c9d1d9;
+        padding: 0 1;
+    }
+    
+    Select > SelectOverlay {
+        background: #161b22;
+        border: solid #58a6ff;
+        width: 100%;
+    }
+    
+    Select > SelectOverlay > OptionList {
+        background: #161b22;
+        color: #c9d1d9;
+        padding: 0;
+        height: auto;
+    }
+    
+    Select > SelectOverlay > OptionList > .option-list--option {
+        padding: 0 1;
+        background: #161b22;
+        color: #c9d1d9;
+    }
+    
+    Select > SelectOverlay > OptionList > .option-list--option-highlighted {
+        background: #30363d;
+        color: #58a6ff;
+    }
+    
+    Select > SelectOverlay > OptionList > .option-list--option-hover {
+        background: #21262d;
     }
     
     #progress-container {
         width: 100%;
         height: 3;
         margin: 0 1;
-        border: solid cyan;
+        border: solid #30363d;
+        background: #161b22;
         padding: 0 1;
     }
 
@@ -724,14 +809,17 @@ class DNSScannerTUI(App):
     #scan-screen {
         width: 100%;
         height: 100%;
+        background: #0d1117;
     }
 
     #stats {
         width: 100%;
         height: auto;
-        border: solid green;
+        border: solid #238636;
+        background: #161b22;
         padding: 1;
         margin: 1;
+        color: #c9d1d9;
     }
 
     #progress-bar {
@@ -739,6 +827,15 @@ class DNSScannerTUI(App):
         max-width: 100%;
         height: 1;
         content-align: center middle;
+    }
+    
+    ProgressBar > .bar--bar {
+        color: #238636;
+        background: #21262d;
+    }
+    
+    ProgressBar > .bar--complete {
+        color: #238636;
     }
 
     #main-content {
@@ -749,14 +846,16 @@ class DNSScannerTUI(App):
     #results {
         width: 60%;
         height: 100%;
-        border: solid cyan;
+        border: solid #58a6ff;
+        background: #161b22;
         margin: 1;
     }
 
     #logs {
         width: 40%;
         height: 100%;
-        border: solid yellow;
+        border: solid #d29922;
+        background: #161b22;
         margin: 1;
     }
 
@@ -769,34 +868,96 @@ class DNSScannerTUI(App):
 
     Button {
         margin: 0 1;
+        background: #21262d;
+        color: #c9d1d9;
+        border: solid #30363d;
+    }
+    
+    Button:hover {
+        background: #30363d;
+        color: #58a6ff;
+    }
+    
+    Button:focus {
+        border: solid #58a6ff;
+    }
+    
+    Button.-primary {
+        background: #238636;
+        color: #ffffff;
+        border: solid #238636;
+    }
+    
+    Button.-primary:hover {
+        background: #2ea043;
     }
 
     DataTable {
         height: 100%;
+        background: #161b22;
+    }
+    
+    DataTable > .datatable--header {
+        background: #21262d;
+        color: #58a6ff;
+        text-style: bold;
+    }
+    
+    DataTable > .datatable--cursor {
+        background: #30363d;
+        color: #c9d1d9;
+    }
+    
+    DataTable > .datatable--hover {
+        background: #21262d;
     }
 
     RichLog {
         height: 100%;
+        background: #161b22;
+        color: #c9d1d9;
+    }
+    
+    Checkbox {
+        background: transparent;
+        color: #c9d1d9;
+        margin-right: 2;
+    }
+    
+    Checkbox:focus > .toggle--button {
+        background: #58a6ff;
+    }
+    
+    .checkbox-row {
+        align: center middle;
+        height: auto;
+        padding: 1 0;
     }
     """
 
     BINDINGS = [
         ("q", "quit", "Quit"),
-        ("s", "save_results", "Save"),
     ]
 
     def __init__(self):
         super().__init__()
         self.subnet_file = ""
+        self.selected_cidr_file = ""  # Track custom selected file
         self.domain = ""
         self.dns_type = "A"
         self.concurrency = 100
         self.random_subdomain = False
         self.test_slipstream = False
+        self.bell_sound_enabled = False  # Bell sound on pass
+        
+        # Config file for caching settings
+        self.config_dir = Path.home() / ".pydns-scanner"
+        self.config_file = self.config_dir / "config.json"
+        
         self.slipstream_manager = SlipstreamManager()
         self.slipstream_path = str(self.slipstream_manager.get_executable_path())
         self.slipstream_domain = ""
-        self.found_servers: Set[str] = set()
+        self.found_servers: Set[str] = set()  # Keep found servers for results
         self.server_times: dict[str, float] = {}
         self.proxy_results: dict[str, str] = {}  # IP -> "Success", "Failed", or "Testing"
         self.start_time = 0.0
@@ -809,9 +970,12 @@ class DNSScannerTUI(App):
         self.pause_event = asyncio.Event()
         self.pause_event.set()  # Not paused initially
         
+        # Button spam protection
+        self._processing_button = False
+        
         # Slipstream parallel testing config
-        self.slipstream_max_concurrent = 3
-        self.slipstream_base_port = 10800  # Base port, will use 10800, 10801, 10802
+        self.slipstream_max_concurrent = 5
+        self.slipstream_base_port = 10800  # Base port, will use 10800-10804
         self.available_ports: deque = deque()  # Available ports for testing
         self.slipstream_semaphore: asyncio.Semaphore = None  # Will be created in async context
         self.pending_slipstream_tests: deque = deque()  # Queue for pending tests
@@ -819,6 +983,10 @@ class DNSScannerTUI(App):
         self.active_scan_tasks: list = []  # Track active DNS scan tasks for cleanup
         self._shutdown_event: asyncio.Event = None  # Signal for graceful shutdown
         self.slipstream_processes: list = []  # Track all slipstream processes for cleanup
+        
+        # Shuffle support
+        self.remaining_ips: list = []  # Track remaining IPs for shuffle feature
+        # Note: tested_ips removed for better memory management - only used temporarily during shuffle
 
     def compose(self) -> ComposeResult:
         """Create child widgets."""
@@ -831,8 +999,13 @@ class DNSScannerTUI(App):
                 
                 with Horizontal(classes="form-row"):
                     yield Label("CIDR File:", classes="form-label")
-                    yield Input(placeholder="Enter path or click Browse", id="input-file", classes="form-input")
-                    yield Button("Browse", id="browse-btn", variant="primary")
+                    yield Select(
+                        [("Iran IPs (~10M IPs)", "iran"), ("Custom File...", "custom")],
+                        value="iran",
+                        allow_blank=False,
+                        id="input-cidr-select",
+                        classes="form-input"
+                    )
                 
                 with Container(id="file-browser-container"):
                     yield PlainDirectoryTree(".", id="file-browser")
@@ -846,6 +1019,7 @@ class DNSScannerTUI(App):
                     yield Select(
                         [("A (IPv4)", "A"), ("AAAA (IPv6)", "AAAA"), ("MX (Mail)", "MX"), ("TXT", "TXT"), ("NS", "NS")],
                         value="A",
+                        allow_blank=False,
                         id="input-type",
                         classes="form-input"
                     )
@@ -854,13 +1028,10 @@ class DNSScannerTUI(App):
                     yield Label("Concurrency:", classes="form-label")
                     yield Input(placeholder="100", id="input-concurrency", classes="form-input", value="100")
                 
-                with Horizontal(classes="form-row"):
-                    yield Label("Random Subdomain:", classes="form-label")
-                    yield Checkbox("Enable", id="input-random")
-                
-                with Horizontal(classes="form-row"):
-                    yield Label("Test with Slipstream:", classes="form-label")
-                    yield Checkbox("Enable Proxy Test", id="input-slipstream")
+                with Horizontal(classes="form-row checkbox-row"):
+                    yield Checkbox("Random Subdomain", id="input-random")
+                    yield Checkbox("Proxy Test", id="input-slipstream")
+                    yield Checkbox("Bell on Pass", id="input-bell")
                 
                 with Horizontal(id="start-buttons"):
                     yield Button("Start Scan", id="start-scan-btn", variant="success")
@@ -878,88 +1049,262 @@ class DNSScannerTUI(App):
                     yield RichLog(id="log-display", highlight=True, markup=True)
             with Horizontal(id="controls"):
                 yield Button("⏸  Pause", id="pause-btn", variant="warning")
+                yield Button("🔀 Shuffle", id="shuffle-btn", variant="default")
                 yield Button("▶  Resume", id="resume-btn", variant="primary")
                 yield Button("Save Results", id="save-btn", variant="success")
                 yield Button("Quit", id="quit-btn", variant="error")
         
         yield Footer()
 
+    def _load_cached_domain(self) -> str:
+        """Load last used domain from config file."""
+        try:
+            if self.config_file.exists():
+                with open(self.config_file, 'r') as f:
+                    config = json.load(f)
+                    return config.get('last_domain', 'google.com')
+        except Exception as e:
+            logger.debug(f"Failed to load cached domain: {e}")
+        return 'google.com'
+    
+    def _save_domain_cache(self, domain: str) -> None:
+        """Save domain to config file for next session."""
+        try:
+            # Create config directory if it doesn't exist
+            self.config_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Load existing config or create new
+            config = {}
+            if self.config_file.exists():
+                try:
+                    with open(self.config_file, 'r') as f:
+                        config = json.load(f)
+                except Exception:
+                    pass
+            
+            # Update domain
+            config['last_domain'] = domain
+            
+            # Save config
+            with open(self.config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+        except Exception as e:
+            logger.debug(f"Failed to save domain cache: {e}")
+    
     def on_mount(self) -> None:
         """Initialize when app is mounted."""
-        # Set Dracula theme
-        self.theme = "dracula"
+        # Set dark theme (GitHub dark)
+        self.dark = True
         
         # Hide scan screen initially
         self.query_one("#scan-screen").display = False
+        
+        # Load cached domain and set it
+        cached_domain = self._load_cached_domain()
+        try:
+            domain_input = self.query_one("#input-domain", Input)
+            domain_input.value = cached_domain
+        except Exception:
+            pass
         
         # Setup results table
         table = self.query_one("#results-table", DataTable)
         table.add_columns("IP Address", "Response Time", "Status", "Proxy Test")
         table.cursor_type = "row"
         
-        # Hide pause/resume buttons initially
+        # Hide pause/resume/shuffle buttons initially
         try:
             self.query_one("#pause-btn", Button).display = False
             self.query_one("#resume-btn", Button).display = False
+            self.query_one("#shuffle-btn", Button).display = False
         except Exception:
             pass
 
     def action_quit(self) -> None:
-        """Immediately force quit the application."""
-        # Kill all slipstream processes first
-        for process in self.slipstream_processes:
+        """Gracefully quit the application with proper cleanup."""
+        # Signal shutdown to stop any running scans
+        if self._shutdown_event:
+            self._shutdown_event.set()
+        
+        # Kill all slipstream processes immediately
+        if hasattr(self, 'slipstream_processes'):
+            for process in self.slipstream_processes[:]:
+                try:
+                    if process and hasattr(process, 'kill'):
+                        process.kill()
+                except Exception:
+                    pass
+            self.slipstream_processes.clear()
+        
+        # Cancel all active scan tasks
+        if hasattr(self, 'active_scan_tasks'):
+            for task in self.active_scan_tasks[:]:
+                try:
+                    if not task.done():
+                        task.cancel()
+                except Exception:
+                    pass
+            self.active_scan_tasks.clear()
+        
+        # Cancel all slipstream test tasks
+        if hasattr(self, 'slipstream_tasks'):
+            for task in list(self.slipstream_tasks):
+                try:
+                    if not task.done():
+                        task.cancel()
+                except Exception:
+                    pass
+            self.slipstream_tasks.clear()
+        
+        # Cancel all Textual workers
+        try:
+            self.workers.cancel_all()
+        except Exception:
+            pass
+        
+        # Force garbage collection
+        gc.collect()
+        
+        # Restore terminal state before force exit
+        try:
+            # Stop the Textual driver to restore terminal
+            if hasattr(self, '_driver') and self._driver:
+                self._driver.stop_application_mode()
+        except Exception:
+            pass
+        
+        # Reset terminal on different platforms
+        if platform.system() == "Windows":
+            # Windows: reset console mode
             try:
-                process.kill()
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                # Get stdout handle
+                handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+                # Enable virtual terminal processing and restore defaults
+                kernel32.SetConsoleMode(handle, 0x0001 | 0x0002 | 0x0004)
+                # Also restore stdin
+                stdin_handle = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+                kernel32.SetConsoleMode(stdin_handle, 0x0080 | 0x0001 | 0x0002 | 0x0004)
+                # Show cursor
+                print("\033[?25h", end="", flush=True)
+            except Exception:
+                pass
+        else:
+            # Unix: reset terminal with stty
+            try:
+                subprocess.run(["stty", "sane"], check=False, capture_output=True)
+                print("\033[?25h", end="", flush=True)  # Show cursor
             except Exception:
                 pass
         
-        # Cancel all active tasks
-        for task in self.active_scan_tasks:
-            try:
-                task.cancel()
-            except Exception:
-                pass
-        
-        for task in self.slipstream_tasks:
-            try:
-                task.cancel()
-            except Exception:
-                pass
-        
-        # Clear task lists
-        self.active_scan_tasks.clear()
-        self.slipstream_tasks.clear()
-        self.slipstream_processes.clear()
-        
-        # Use Textual's proper exit to restore terminal
-        self.exit()
+        # Force exit
+        os._exit(0)
+
+    def _update_keybinding_visibility(self, scanning: bool = False, paused: bool = False) -> None:
+        """Update keybinding visibility based on app state."""
+        try:
+            # Rebuild BINDINGS based on state
+            if scanning:
+                if paused:
+                    # Paused: show quit, copy, resume, shuffle
+                    self.__class__.BINDINGS = [
+                        ("q", "quit", "Quit"),
+                        ("c", "save_results", "Copy"),
+                        ("r", "resume_scan", "Resume"),
+                        ("s", "shuffle_ips", "Shuffle"),
+                    ]
+                else:
+                    # Running: show quit, copy, pause
+                    self.__class__.BINDINGS = [
+                        ("q", "quit", "Quit"),
+                        ("c", "save_results", "Copy"),
+                        ("p", "pause_scan", "Pause"),
+                    ]
+            else:
+                # Start screen - only show Quit
+                self.__class__.BINDINGS = [
+                    ("q", "quit", "Quit"),
+                ]
+            
+            # Force refresh bindings by calling refresh_bindings
+            self.refresh_bindings()
+        except Exception:
+            pass
+
+    def action_pause_scan(self) -> None:
+        """Keybinding action to pause scan."""
+        if self.scan_started and not self.is_paused:
+            self._pause_scan()
+            self._update_keybinding_visibility(scanning=True, paused=True)
+
+    def action_resume_scan(self) -> None:
+        """Keybinding action to resume scan."""
+        if self.scan_started and self.is_paused:
+            self._resume_scan()
+            self._update_keybinding_visibility(scanning=True, paused=False)
+
+    def action_shuffle_ips(self) -> None:
+        """Keybinding action to shuffle IPs (only when paused)."""
+        if self.scan_started and self.is_paused:
+            self.run_worker(self._shuffle_remaining_ips_async(), exclusive=False)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button clicks."""
-        if event.button.id == "start-scan-btn":
-            self._start_scan_from_form()
-        elif event.button.id == "browse-btn":
-            # Toggle file browser visibility
+        # Prevent button spam crashes
+        if event.button.id in ["start-scan-btn", "pause-btn", "resume-btn", "shuffle-btn"]:
+            if self._processing_button:
+                return
+            self._processing_button = True
+        
+        try:
+            if event.button.id == "start-scan-btn":
+                self._start_scan_from_form()
+            elif event.button.id == "exit-btn":
+                self.action_quit()
+            elif event.button.id == "pause-btn":
+                self._pause_scan()
+            elif event.button.id == "resume-btn":
+                self._resume_scan()
+            elif event.button.id == "shuffle-btn":
+                # Run async shuffle in worker
+                self.run_worker(self._shuffle_remaining_ips_async(), exclusive=False)
+            elif event.button.id == "save-btn":
+                self.action_save_results()
+            elif event.button.id == "quit-btn":
+                self.action_quit()
+        finally:
+            if event.button.id in ["start-scan-btn", "pause-btn", "resume-btn", "shuffle-btn"]:
+                self._processing_button = False
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        """Handle CIDR dropdown selection changes."""
+        if event.select.id == "input-cidr-select":
             browser = self.query_one("#file-browser-container")
-            browser.display = not browser.display
-        elif event.button.id == "exit-btn":
-            self.action_quit()
-        elif event.button.id == "pause-btn":
-            self._pause_scan()
-        elif event.button.id == "resume-btn":
-            self._resume_scan()
-        elif event.button.id == "save-btn":
-            self.action_save_results()
-        elif event.button.id == "quit-btn":
-            self.action_quit()
+            if event.value == "custom":
+                # Show file browser when Custom is selected
+                browser.display = True
+            else:
+                # Hide browser for other selections
+                browser.display = False
 
     def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
         """Handle file selection from directory tree."""
-        # Set the selected file path
-        file_input = self.query_one("#input-file", Input)
-        file_input.value = str(event.path)
-        # Hide browser
+        selected_file = str(event.path)
+        
+        # Store the selected file path
+        self.selected_cidr_file = selected_file
+        
+        # Keep dropdown at "custom" value without adding new option
+        cidr_select = self.query_one("#input-cidr-select", Select)
+        cidr_select.value = "custom"
+        
+        # Hide browser after selection
         self.query_one("#file-browser-container").display = False
+        
+        # Notify user which file was selected
+        file_name = Path(selected_file).name
+        self.notify(f"Selected: {file_name}", severity="information", timeout=3)
 
     def _pause_scan(self) -> None:
         """Pause the current scan."""
@@ -975,13 +1320,22 @@ class DNSScannerTUI(App):
         try:
             self.query_one("#pause-btn", Button).display = False
             self.query_one("#resume-btn", Button).display = True
+            self.query_one("#shuffle-btn", Button).display = True
         except Exception:
             pass
+        
+        # Update keybinding visibility
+        self._update_keybinding_visibility(scanning=True, paused=True)
 
     def _resume_scan(self) -> None:
         """Resume the paused scan."""
         if not self.scan_started or not self.is_paused:
             return
+        
+        # If user shuffled IPs, we need to switch to memory mode for remaining scan
+        if self.remaining_ips:
+            self._log("[cyan]Resuming with shuffled IP order...[/cyan]")
+            # The scan loop will handle the shuffled order appropriately
         
         self.is_paused = False
         self.pause_event.set()
@@ -992,43 +1346,66 @@ class DNSScannerTUI(App):
         try:
             self.query_one("#pause-btn", Button).display = True
             self.query_one("#resume-btn", Button).display = False
+            self.query_one("#shuffle-btn", Button).display = False
         except Exception:
             pass
+        
+        # Update keybinding visibility
+        self._update_keybinding_visibility(scanning=True, paused=False)
 
     def _start_scan_from_form(self) -> None:
         """Get values from form and start scanning."""
         # Get form values
-        file_input = self.query_one("#input-file", Input)
+        cidr_select = self.query_one("#input-cidr-select", Select)
         domain_input = self.query_one("#input-domain", Input)
         type_select = self.query_one("#input-type", Select)
         concurrency_input = self.query_one("#input-concurrency", Input)
         random_checkbox = self.query_one("#input-random", Checkbox)
         slipstream_checkbox = self.query_one("#input-slipstream", Checkbox)
+        bell_checkbox = self.query_one("#input-bell", Checkbox)
         
-        self.subnet_file = file_input.value.strip()
+        # Determine CIDR file based on dropdown selection
+        cidr_value = str(cidr_select.value) if cidr_select.value else "iran"
+        
+        if cidr_value == "iran":
+            # Use bundled Iran CIDR file as default
+            iran_cidr_path = Path(__file__).parent / "iran-ipv4.cidrs"
+            if not iran_cidr_path.exists():
+                self.notify("Iran CIDR file not found! Please reinstall or select a custom file.", severity="error")
+                return
+            self.subnet_file = str(iran_cidr_path)
+        elif cidr_value == "custom":
+            # Use the custom selected file
+            if not self.selected_cidr_file:
+                self.notify("Please select a CIDR file from the file browser!", severity="warning")
+                return
+            if not Path(self.selected_cidr_file).exists():
+                self.notify(f"File not found: {self.selected_cidr_file}", severity="error")
+                return
+            self.subnet_file = self.selected_cidr_file
+        else:
+            # Fallback to Iran default
+            iran_cidr_path = Path(__file__).parent / "iran-ipv4.cidrs"
+            self.subnet_file = str(iran_cidr_path)
+        
         self.domain = domain_input.value.strip()
         self.slipstream_domain = self.domain
         self.dns_type = str(type_select.value) if type_select.value else "A"
         self.random_subdomain = random_checkbox.value
         self.test_slipstream = slipstream_checkbox.value
+        self.bell_sound_enabled = bell_checkbox.value
         
         try:
             self.concurrency = int(concurrency_input.value.strip() or "100")
         except ValueError:
             self.concurrency = 100
         
-        # Validate
-        if not self.subnet_file:
-            self.notify("Please enter a CIDR file path!", severity="error")
-            return
-        
-        if not Path(self.subnet_file).exists():
-            self.notify(f"File not found: {self.subnet_file}", severity="error")
-            return
-        
         if not self.domain:
             self.notify("Please enter a domain!", severity="error")
             return
+        
+        # Save domain for next session
+        self._save_domain_cache(self.domain)
         
         # Check slipstream version and update if needed
         if self.test_slipstream:
@@ -1059,6 +1436,10 @@ class DNSScannerTUI(App):
         
         # Start scanning
         self.scan_started = True
+        
+        # Update keybinding visibility for scan mode
+        self._update_keybinding_visibility(scanning=True, paused=False)
+        
         self.run_worker(self._scan_async(), exclusive=True)
 
     async def _check_update_and_start_scan(self) -> None:
@@ -1105,6 +1486,10 @@ class DNSScannerTUI(App):
             pass
         
         self.scan_started = True
+        
+        # Update keybinding visibility for scan mode
+        self._update_keybinding_visibility(scanning=True, paused=False)
+        
         await self._scan_async()
 
     async def _download_and_start_scan(self) -> None:
@@ -1140,6 +1525,10 @@ class DNSScannerTUI(App):
             log_widget.write("[green]Starting scan...[/green]\n")
             
             self.scan_started = True
+            
+            # Update keybinding visibility for scan mode
+            self._update_keybinding_visibility(scanning=True, paused=False)
+            
             await self._scan_async()
         else:
             log_widget.write("[red]✗ Failed to download Slipstream after multiple retries![/red]")
@@ -1156,6 +1545,11 @@ class DNSScannerTUI(App):
         self.proxy_results.clear()
         self.current_scanned = 0
         self.table_needs_rebuild = False
+        self.remaining_ips.clear()
+        # tested_ips removed for better memory management
+        
+        # Force garbage collection after clearing large structures
+        gc.collect()
         
         # Reset pause state
         self.is_paused = False
@@ -1181,26 +1575,23 @@ class DNSScannerTUI(App):
         self._log("[cyan]Analyzing CIDR file...[/cyan]")
         await asyncio.sleep(0)
         
-        # Fast count of lines to estimate total
+        # Fast count of total IPs (not lines) for accurate progress
         loop = asyncio.get_event_loop()
-        line_count = await loop.run_in_executor(None, self._count_file_lines, self.subnet_file)
+        total_ips = await loop.run_in_executor(None, self._count_total_ips_fast, self.subnet_file)
         
-        if line_count == 0:
-            self._log("[red]ERROR: No valid subnets found in file![/red]")
-            self.notify("No valid subnets! Check CIDR file format.", severity="error")
+        if total_ips == 0:
+            self._log("[red]ERROR: No valid IPs found in CIDR file![/red]")
+            self.notify("No valid IPs! Check CIDR file format.", severity="error")
             return
         
-        self._log(f"[cyan]Found {line_count} CIDR entries. Starting scan...[/cyan]")
+        self._log(f"[cyan]Found {total_ips:,} total IPs to scan. Starting...[/cyan]")
         await asyncio.sleep(0)
-        
-        # Estimate total IPs (rough estimate: assume average /24)
-        estimated_ips = line_count * 254
         
         try:
             stats = self.query_one("#stats", StatsWidget)
-            stats.total = estimated_ips
+            stats.total = total_ips
             progress_bar = self.query_one("#progress-bar", CustomProgressBar)
-            progress_bar.update_progress(0, estimated_ips)
+            progress_bar.update_progress(0, total_ips)
         except Exception:
             pass
         
@@ -1214,14 +1605,15 @@ class DNSScannerTUI(App):
         # Create semaphore
         sem = asyncio.Semaphore(self.concurrency)
         
-        # Stream IPs and scan in chunks - START IMMEDIATELY!
-        self._log("[green]Starting real-time streaming scan...[/green]")
+        # Use memory-efficient streaming by default
+        self._log("[green]Starting memory-efficient streaming scan...[/green]")
         await asyncio.sleep(0)
         
         chunk_size = 500  # Process 500 IPs at a time
         active_tasks = []
         chunk_num = 0
         
+        # Stream IPs efficiently without loading all into memory
         async for ip_chunk in self._stream_ips_from_file():
             # Check for shutdown
             if self._shutdown_event and self._shutdown_event.is_set():
@@ -1229,6 +1621,11 @@ class DNSScannerTUI(App):
             
             # Check for pause
             await self.pause_event.wait()
+            
+            # After resume, if user shuffled, switch to shuffled mode
+            if self.remaining_ips:
+                self._log("[cyan]Switching to shuffled IP scanning mode...[/cyan]")
+                break  # Exit streaming loop to handle shuffled IPs below
             
             chunk_num += 1
             
@@ -1249,7 +1646,6 @@ class DNSScannerTUI(App):
                 if self._shutdown_event and self._shutdown_event.is_set():
                     break
                 
-                # self._log(f"[dim]Processing chunk {chunk_num}...[/dim]")
                 # Wait for some tasks to complete
                 done, active_tasks = await asyncio.wait(active_tasks, return_when=asyncio.FIRST_COMPLETED)
                 
@@ -1267,10 +1663,69 @@ class DNSScannerTUI(App):
                 self.active_scan_tasks = active_tasks
                 await asyncio.sleep(0)  # Yield to UI
         
+        # Handle shuffled IPs if user shuffled during pause
+        if self.remaining_ips:
+            self._log(f"[cyan]Scanning {len(self.remaining_ips)} shuffled IPs...[/cyan]")
+            
+            # Process shuffled IPs in chunks
+            shuffled_index = 0
+            while shuffled_index < len(self.remaining_ips):
+                # Check for shutdown
+                if self._shutdown_event and self._shutdown_event.is_set():
+                    break
+                
+                # Check for pause
+                await self.pause_event.wait()
+                
+                # Get next chunk of shuffled IPs
+                chunk_end = min(shuffled_index + chunk_size, len(self.remaining_ips))
+                shuffled_chunk = self.remaining_ips[shuffled_index:chunk_end]
+                shuffled_index = chunk_end
+                
+                # Create tasks for this shuffled chunk
+                for ip in shuffled_chunk:
+                    # remaining_ips already contains only untested IPs
+                    task = asyncio.create_task(self._test_dns_with_callback(ip, sem))
+                    active_tasks.append(task)
+                
+                # Process completed tasks
+                if len(active_tasks) >= chunk_size or shuffled_index >= len(self.remaining_ips):
+                    await self.pause_event.wait()
+                    
+                    if self._shutdown_event and self._shutdown_event.is_set():
+                        break
+                    
+                    done, active_tasks = await asyncio.wait(active_tasks, return_when=asyncio.FIRST_COMPLETED)
+                    
+                    for task in done:
+                        try:
+                            result = await task
+                            await self._process_result(result)
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception as e:
+                            logger.error(f"Task error: {e}")
+                    
+                    active_tasks = list(active_tasks)
+                    await asyncio.sleep(0)
+        
+        # Clear shuffled IPs from memory after processing for better memory management
+        if self.remaining_ips:
+            shuffled_count = len(self.remaining_ips)
+            self.remaining_ips.clear()  # Free memory
+            gc.collect()  # Force garbage collection
+            self._log(f"[dim]Cleared {shuffled_count} shuffled IPs from memory (GC triggered)[/dim]")
+        
         # Check if we're shutting down
         if self._shutdown_event and self._shutdown_event.is_set():
             self._log("[yellow]Scan interrupted - cleaning up...[/yellow]")
             # Cancel remaining tasks
+            for task in active_tasks:
+                if not task.done():
+                    task.cancel()
+            return
+        
+        # Wait for all remaining tasks
             for task in active_tasks:
                 if not task.done():
                     task.cancel()
@@ -1291,6 +1746,9 @@ class DNSScannerTUI(App):
 
         self._log(f"[cyan]Scan complete. Scanned: {self.current_scanned}, Found: {len(self.found_servers)}[/cyan]")
         logger.info(f"Scan complete. Scanned: {self.current_scanned}, Found: {len(self.found_servers)}")
+        
+        # Full garbage collection after scan completes
+        gc.collect()
 
         # Update final statistics
         try:
@@ -1323,11 +1781,39 @@ class DNSScannerTUI(App):
             except asyncio.TimeoutError:
                 self._log("[yellow]Timeout waiting for slipstream tests - continuing anyway[/yellow]")
             self._rebuild_table()  # Rebuild after all tests complete
+            # Collect garbage after proxy tests complete
+            gc.collect()
         
         # Auto-save results
         self._auto_save_results()
         
         self.notify("Scan complete! Results auto-saved.", severity="information")
+
+    def _count_total_ips_fast(self, filepath: str) -> int:
+        """Fast counting of total IPs in CIDR file without loading into memory.
+        
+        This provides an accurate count for progress tracking without memory overhead.
+        """
+        total_ips = 0
+        try:
+            with open(filepath, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#'):
+                        try:
+                            network = ipaddress.IPv4Network(line, strict=False)
+                            # Count actual host IPs (excluding network/broadcast for subnets)
+                            if network.prefixlen >= 31:  # /31 or /32
+                                total_ips += network.num_addresses
+                            else:
+                                total_ips += network.num_addresses - 2  # Exclude network & broadcast
+                        except Exception:
+                            pass  # Skip invalid lines
+        except Exception as e:
+            logger.error(f"Failed to count IPs in file: {e}")
+            return 0
+        
+        return total_ips
 
     def _count_file_lines(self, filepath: str) -> int:
         """Fast line counting for CIDR file."""
@@ -1378,7 +1864,11 @@ class DNSScannerTUI(App):
         return subnets
 
     async def _stream_ips_from_file(self) -> AsyncGenerator[list[str], None]:
-        """Stream IPs from CIDR file in chunks without loading everything into memory."""
+        """Stream IPs from CIDR file in chunks without loading everything into memory.
+        
+        Memory-efficient streaming approach that only loads IPs into remaining_ips
+        when shuffle functionality is actually needed.
+        """
         chunk = []
         chunk_size = 500  # Yield 500 IPs at a time
         rng = secrets.SystemRandom()
@@ -1406,7 +1896,7 @@ class DNSScannerTUI(App):
         subnets = await loop.run_in_executor(None, read_and_process)
         rng.shuffle(subnets)
         
-        # Generate IPs from subnets
+        # Generate IPs from subnets - stream them efficiently
         for net in subnets:
             # Split into /24 chunks
             if net.prefixlen >= 24:
@@ -1418,12 +1908,14 @@ class DNSScannerTUI(App):
             
             for subnet_chunk in chunks:
                 if subnet_chunk.num_addresses == 1:
-                    chunk.append(str(subnet_chunk.network_address))
+                    ip_str = str(subnet_chunk.network_address)
+                    chunk.append(ip_str)
                 else:
                     ips = list(subnet_chunk.hosts())
                     rng.shuffle(ips)
                     for ip in ips:
-                        chunk.append(str(ip))
+                        ip_str = str(ip)
+                        chunk.append(ip_str)
                         
                         # Yield chunk when it reaches size
                         if len(chunk) >= chunk_size:
@@ -1446,7 +1938,7 @@ class DNSScannerTUI(App):
         if isinstance(result, tuple):
             ip, is_valid, response_time = result
             
-            # Update scanned count
+            # Update scanned count (no longer tracking tested_ips for memory efficiency)
             self.current_scanned += 1
             
             if is_valid:
@@ -1471,12 +1963,16 @@ class DNSScannerTUI(App):
                     stats.scanned = self.current_scanned
                     stats.elapsed = elapsed
                     stats.speed = self.current_scanned / elapsed if elapsed > 0 else 0
-                    stats.found = len(self.found_servers)
+                    stats.found = len(self.found_servers)  # Use actual found count (after removals)
                     
                     progress_bar = self.query_one("#progress-bar", CustomProgressBar)
                     progress_bar.update_progress(self.current_scanned, stats.total)
                 except Exception:
                     pass
+                
+                # Periodic garbage collection every 1000 scans to prevent memory buildup
+                if self.current_scanned % 1000 == 0:
+                    gc.collect(generation=0)  # Fast generation-0 collection
 
     def _collect_ips(self, subnets: list[ipaddress.IPv4Network]) -> list[str]:
         """Collect all IPs from subnets in random order using CSPRNG."""
@@ -1623,9 +2119,40 @@ class DNSScannerTUI(App):
         try:
             table = self.query_one("#results-table", DataTable)
             
-            # Clear and rebuild table sorted by response time
+            # Clear and rebuild table with smart sorting:
+            # 1. Passed proxy tests (lowest ping first)
+            # 2. Testing status
+            # 3. Queued/Pending
+            # 4. N/A status
+            # 5. Failed tests (last) - but only show if slipstream disabled
             table.clear()
-            sorted_servers = sorted(self.server_times.items(), key=lambda x: x[1])
+            
+            def sort_key(item):
+                server_ip, server_time = item
+                proxy_status = self.proxy_results.get(server_ip, "N/A")
+                
+                # Priority order: Success=0, Testing=1, Pending=2, N/A=3, Failed=4
+                if proxy_status == "Success":
+                    priority = 0
+                elif proxy_status == "Testing":
+                    priority = 1
+                elif proxy_status == "Pending":
+                    priority = 2
+                elif proxy_status == "N/A":
+                    priority = 3
+                else:  # Failed
+                    # If slipstream is enabled, failed tests are removed from server_times
+                    # so this shouldn't happen, but handle it just in case
+                    priority = 4
+                
+                # Sort by priority first, then by response time
+                return (priority, server_time)
+            
+            # Only show servers that are still in found_servers (failed ones removed)
+            active_servers = {ip: time for ip, time in self.server_times.items() 
+                            if ip in self.found_servers}
+            
+            sorted_servers = sorted(active_servers.items(), key=sort_key)
             
             for server_ip, server_time in sorted_servers:
                 server_ms = server_time * 1000
@@ -1679,8 +2206,22 @@ class DNSScannerTUI(App):
                 
                 if result == "Success":
                     self._log(f"[green]✓ Proxy test PASSED: {dns_ip}[/green]")
+                    # Play bell sound if enabled
+                    if self.bell_sound_enabled:
+                        self._play_bell_sound()
                 else:
                     self._log(f"[red]✗ Proxy test FAILED: {dns_ip}[/red]")
+                    # Remove failed proxy test from found servers if slipstream is enabled
+                    if self.test_slipstream and dns_ip in self.found_servers:
+                        self.found_servers.remove(dns_ip)
+                        if dns_ip in self.server_times:
+                            del self.server_times[dns_ip]
+                        self._log(f"[yellow]Removed {dns_ip} from results (failed proxy test)[/yellow]")
+                        # Force table rebuild to reflect removal
+                        self.table_needs_rebuild = True
+                        self._rebuild_table()
+                        # Trigger GC after removal
+                        gc.collect()
                 
                 self._update_table_row(dns_ip)  # Update UI with final result
                 
@@ -1851,6 +2392,156 @@ class DNSScannerTUI(App):
                         self.slipstream_processes.remove(process)
                 except Exception:
                     pass
+    
+    def _shuffle_remaining_ips(self) -> None:
+        """Shuffle the remaining untested IPs while preserving tested ones.
+        
+        Note: For large CIDR files, this will load remaining IPs into memory.
+        This is only done when shuffle is actually requested to maintain efficiency.
+        Uses temporary tested_ips tracking only during shuffle for memory efficiency.
+        """
+        if not self.is_paused:
+            self.notify("Can only shuffle when paused!", severity="warning")
+            return
+        
+        # If remaining_ips is empty, we need to build it from untested IPs
+        if not self.remaining_ips:
+            self._log("[yellow]Loading remaining IPs for shuffle (this may use memory for large files)...[/yellow]")
+            self.notify("Loading IPs for shuffle...", severity="information", timeout=3)
+            
+            # Temporarily build tested_ips set from found_servers for shuffle logic
+            # This is memory-intensive but only done when shuffle is requested
+            temp_tested_ips = set(self.found_servers)  # Only IPs that were found (much smaller set)
+            
+            try:
+                # Re-read the file to get all IPs
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                async def build_remaining():
+                    all_ips = []
+                    async for ip_chunk in self._stream_ips_from_file():
+                        all_ips.extend(ip_chunk)
+                    return [ip for ip in all_ips if ip not in temp_tested_ips]
+                
+                self.remaining_ips = loop.run_until_complete(build_remaining())
+                loop.close()
+                
+                # Clear temporary set to free memory
+                del temp_tested_ips
+                
+            except Exception as e:
+                self._log(f"[red]Failed to load IPs for shuffle: {e}[/red]")
+                self.notify("Shuffle failed - unable to load IPs", severity="error")
+                return
+        
+        untested_count = len(self.remaining_ips)
+        
+        if untested_count == 0:
+            self.notify("All IPs have been tested!", severity="information")
+            return
+        
+        # Warn about memory usage for large lists
+        if untested_count > 100000:  # > 100k IPs
+            self._log(f"[yellow]Warning: Shuffling {untested_count} IPs may use significant memory[/yellow]")
+        
+        # Shuffle the remaining untested IPs
+        rng = secrets.SystemRandom()
+        rng.shuffle(self.remaining_ips)
+        
+        # Force garbage collection after shuffle
+        gc.collect()
+        
+        self._log(f"[cyan]🔀 Shuffled {untested_count} untested IPs (optimized memory usage)[/cyan]")
+        self.notify(f"Shuffled {untested_count} untested IPs", severity="information")
+    
+    async def _shuffle_remaining_ips_async(self) -> None:
+        """Async version of shuffle to avoid event loop conflicts."""
+        if not self.is_paused:
+            self.notify("Can only shuffle when paused!", severity="warning")
+            return
+        
+        # If remaining_ips is empty, we need to build it from untested IPs
+        if not self.remaining_ips:
+            self._log("[yellow]Loading remaining IPs for shuffle (this may use memory for large files)...[/yellow]")
+            self.notify("Loading IPs for shuffle...", severity="information", timeout=3)
+            
+            # Temporarily build tested_ips set from found_servers for shuffle logic
+            temp_tested_ips = set(self.found_servers)
+            
+            try:
+                # Re-read the file to get all IPs using the existing async generator
+                all_ips = []
+                async for ip_chunk in self._stream_ips_from_file():
+                    all_ips.extend(ip_chunk)
+                
+                # Filter out already found servers
+                self.remaining_ips = [ip for ip in all_ips if ip not in temp_tested_ips]
+                
+                # Clear temporary set to free memory
+                del temp_tested_ips
+                
+            except Exception as e:
+                self._log(f"[red]Failed to load IPs for shuffle: {e}[/red]")
+                self.notify("Shuffle failed - unable to load IPs", severity="error")
+                return
+        
+        untested_count = len(self.remaining_ips)
+        
+        if untested_count == 0:
+            self.notify("All IPs have been tested!", severity="information")
+            return
+        
+        # Warn about memory usage for large lists
+        if untested_count > 100000:
+            self._log(f"[yellow]Warning: Shuffling {untested_count} IPs may use significant memory[/yellow]")
+        
+        # Shuffle the remaining untested IPs
+        rng = secrets.SystemRandom()
+        rng.shuffle(self.remaining_ips)
+        
+        # Force garbage collection after shuffle
+        gc.collect()
+        
+        self._log(f"[cyan]🔀 Shuffled {untested_count} untested IPs (optimized memory usage)[/cyan]")
+        self.notify(f"Shuffled {untested_count} untested IPs", severity="information")
+
+    def _play_bell_sound(self) -> None:
+        """Play a sparkle sound with error handling for systems without sound support."""
+        try:
+            # Try to play sparkle sound
+            if platform.system() == "Windows":
+                # Windows sparkle effect - ascending tones
+                import winsound
+                # Play a nice ascending sparkle pattern
+                winsound.Beep(800, 50)   # First tone
+                winsound.Beep(1000, 50)  # Second tone
+                winsound.Beep(1200, 80)  # Third tone (longer)
+            elif platform.system() == "Darwin":
+                # macOS - try system sound, fallback to multiple bells
+                try:
+                    import subprocess
+                    subprocess.run(["afplay", "/System/Library/Sounds/Glass.aiff"], check=False, timeout=1)
+                except Exception:
+                    # Fallback to multiple terminal bells for sparkle effect
+                    print('\a', end='', flush=True)
+                    time.sleep(0.05)
+                    print('\a', end='', flush=True)
+            else:
+                # Linux/Unix - multiple terminal bells for sparkle effect
+                print('\a', end='', flush=True)
+                time.sleep(0.05)
+                print('\a', end='', flush=True)
+        except ImportError:
+            # winsound not available on non-Windows
+            try:
+                print('\a', end='', flush=True)
+            except Exception:
+                pass  # Silently fail if bell not supported
+        except Exception as e:
+            # Silently handle any sound errors (e.g., no sound card, server environment)
+            logger.debug(f"Sparkle sound failed: {e}")
+            pass
     
     def _log(self, message: str) -> None:
         """Add message to log display."""

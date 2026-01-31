@@ -31,23 +31,41 @@
   This tool can scan millions of IP addresses to find working DNS servers with optional Slipstream proxy testing and automatic multi-platform client download.
 </div>
 
+## 🎉 What's New in v1.1.0
+
+### 🎨 Visual & UX Improvements
+- **GitHub Dark Theme** - Beautiful dark mode with GitHub-style colors (#0d1117 background, #58a6ff accents)
+- **Full-Screen Start Menu** - Configuration form now uses full terminal height/width
+- **Improved Dropdowns** - Fixed dropdown menu styling with proper height and text visibility
+- **Compact Checkboxes** - All options (Random Subdomain, Proxy Test, Bell Sound) in single row
+
+### ⚡ Performance Enhancements
+- **5 Concurrent Proxy Tests** - Increased from 3 to 5 parallel Slipstream tests (ports 10800-10804)
+- **Better Exit Handling** - Proper terminal restoration on quit with cursor and input recovery
+
+### 🌍 CIDR Management
+- **Bundled Iran IPs** - Pre-loaded ~10M Iran IPv4 addresses (iran-ipv4.cidrs)
+- **CIDR Dropdown** - Easy selection between Iran default and custom files
+- **Domain Caching** - Remembers last domain across sessions
+
 ## ✨ Features
 
-- 🎨 **Beautiful TUI Interface** - Modern Dracula-themed terminal interface
+- 🎨 **Beautiful TUI Interface** - GitHub dark-themed terminal interface
 - ⚡ **High Performance** - Asynchronous scanning with configurable concurrency
-- ⏸️ **Pause/Resume Support** - Pause and resume scans at any time without losing progress
+- ⏸️ **Pause/Resume/Shuffle** 
 - 📊 **Real-time Statistics** - Live progress tracking and scan metrics
 - 🔍 **Smart DNS Detection** - Detects working DNS servers even with error responses (NXDOMAIN, NODATA)
 - 🎲 **Random Subdomain Support** - Avoid cached responses with random subdomains
 - 🌐 **Multiple DNS Types** - Supports A, AAAA, MX, TXT, NS records
-- 🔌 **Slipstream Integration** - Optional proxy testing with parallel execution
+- 🔌 **Slipstream Integration** - Optional proxy testing with 5 parallel executions
 - 🌍 **Multi-Platform Auto-Download** - Automatically downloads correct Slipstream client for your platform
 - 📥 **Resume Downloads** - Smart download resume on network interruptions with retry logic
 - 💾 **Auto-save Results** - Automatic JSON export of scan results
-- 📁 **File Browser** - Built-in file picker for CIDR files
+- 📁 **CIDR Management** - Built-in Iran IPs + custom file picker
 - ⚙️ **Configurable** - Adjustable concurrency, timeouts, and filters
 - 🚀 **Memory Efficient** - Streaming IP generation without loading all IPs into memory
 - 📝 **Optional Logging** - Disabled by default, easy to enable for troubleshooting
+- 🔔 **Audio Alerts** - Optional sparkle sound on successful proxy tests
 
 ## 📋 Requirements
 
@@ -67,7 +85,7 @@ pyperclip>=1.8.0      # Clipboard support
 ```
 
 ### Optional
-- **Slipstream Client** - For proxy testing functionality
+- **Slipstream Client** - For proxy testing functionality (5 concurrent tests)
   - **Automatic Download**: The application automatically detects your platform and downloads the correct client
   - **Smart Detection**: Detects existing installations (including legacy filenames)
   - **Resume Support**: Partial downloads are saved and can be resumed on retry

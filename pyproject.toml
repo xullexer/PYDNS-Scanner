@@ -19,7 +19,10 @@ keywords = [
     "terminal",
     "network",
     "async",
-    "textual"
+    "textual",
+    "proxy",
+    "slipstream",
+    "cidr"
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -63,3 +66,7 @@ include = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["python"]
+
+# Include CIDR data files in the package
+[tool.hatch.build.targets.wheel.shared-data]
+"python/iran-ipv4.cidrs" = "python/iran-ipv4.cidrs"
