@@ -3,7 +3,7 @@
 <br>
 <div align="center">
   <img
-    src="https://github.com/user-attachments/assets/42a51031-5e8e-40a2-ae02-d77c6105587b"
+    src="https://github.com/user-attachments/assets/6c3e0b70-3a31-4dc4-827d-b34135edd089"
     width="720"
     style="border-radius:12px;"
   />
@@ -19,9 +19,9 @@
 <br>
 
 <div align="center">
-  🇺🇸 <a href="README.md"><b>English</b></a>
+  🇺🇸 <a href="https://github.com/xullexer/PYDNS-Scanner/blob/main/README.md"><b>English</b></a>
   &nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
-  🇮🇷 <a href="README-FA.md"><b>فارسی</b></a>
+  🇮🇷 <a href="https://github.com/xullexer/PYDNS-Scanner/blob/main/README-FA.md"><b>فارسی</b></a>
 </div>
 
 <br>
