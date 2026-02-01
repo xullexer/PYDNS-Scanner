@@ -684,10 +684,12 @@ class DNSScannerTUI(App):
     
     #start-form {
         width: 100%;
-        height: 100%;
+        height: auto;
+        max-height: 100%;
         border: solid #30363d;
         background: #161b22;
         padding: 2;
+        overflow-y: auto;
     }
     
     #start-title {
@@ -728,7 +730,8 @@ class DNSScannerTUI(App):
     
     #file-browser-container {
         width: 100%;
-        height: 15;
+        height: 10;
+        max-height: 15;
         border: solid #238636;
         background: #161b22;
         margin: 1 0;
@@ -803,6 +806,14 @@ class DNSScannerTUI(App):
         height: auto;
         align: center middle;
         margin-top: 2;
+    }
+    
+    #start-help-text {
+        width: 100%;
+        text-align: center;
+        color: #8b949e;
+        margin-top: 1;
+        padding: 0 2;
     }
     
     /* Scan Screen Styles */
@@ -1036,6 +1047,8 @@ class DNSScannerTUI(App):
                 with Horizontal(id="start-buttons"):
                     yield Button("Start Scan", id="start-scan-btn", variant="success")
                     yield Button("Exit", id="exit-btn", variant="error")
+                
+                yield Static("[dim]Press Enter in any field or click 'Start Scan' to begin[/dim]", id="start-help-text")
         
         # Scan Screen (initially hidden)
         with Container(id="scan-screen"):
@@ -1305,6 +1318,19 @@ class DNSScannerTUI(App):
         # Notify user which file was selected
         file_name = Path(selected_file).name
         self.notify(f"Selected: {file_name}", severity="information", timeout=3)
+    
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle Enter key press in input fields on start screen."""
+        # Only handle inputs on start screen
+        if event.input.id in ["input-domain", "input-concurrency"]:
+            # Check if start screen is visible
+            try:
+                start_screen = self.query_one("#start-screen")
+                if start_screen.display:
+                    # Start the scan when Enter is pressed
+                    self._start_scan_from_form()
+            except Exception:
+                pass
 
     def _pause_scan(self) -> None:
         """Pause the current scan."""
