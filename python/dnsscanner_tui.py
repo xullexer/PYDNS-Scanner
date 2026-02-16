@@ -70,12 +70,12 @@ class PlainDirectoryTree(DirectoryTree):
 # Configure logging (disabled by default)
 logger.remove()  # Remove default handler to disable all logging
 # Uncomment below to enable file logging for debugging
-# logger.add(
-#     "logs/dnsscanner_{time}.log",
-#     rotation="50 MB",
-#     compression="zip",
-#     level="DEBUG",
-# )
+#logger.add(
+#    "logs/dnsscanner_{time}.log",
+#    rotation="50 MB",
+#    compression="zip",
+#    level="DEBUG",
+#)
 
 
 class SlipstreamManager:
@@ -672,29 +672,27 @@ class SlipstreamManager:
 
 
 class StatsWidget(Static):
-    """Display scan statistics."""
+    """Widget to display scan statistics, including ETA and average response time."""
 
+    scanned = reactive(0)
+    total = reactive(0)
     found = reactive(0)
     passed = reactive(0)
     failed = reactive(0)
-    scanned = reactive(0)
-    total = reactive(0)
-    speed = reactive(0.0)
     elapsed = reactive(0.0)
-
+    speed = reactive(0.0)
+    average_time = reactive(0.0)  # New: Average response time
+    
     def render(self) -> str:
-        """Render the stats."""
-        return f"""[b cyan]PYDNS Scanner Statistics[/b cyan]
+        remaining = self.total - self.scanned
+        eta = remaining / self.speed if self.speed > 0 else 0
+        eta_str = f"{eta / 60:.1f} min" if eta > 60 else f"{eta:.0f} sec"
+        avg_time_str = f"{self.average_time * 1000:.0f} ms" if self.found > 0 else "N/A"
 
-[yellow]Total IPs:[/yellow] {self.total:,}
-[yellow]Scanned:[/yellow] {self.scanned:,}
-[white]Found:[/white] {self.found}
-[green]Pass:[/green] {self.passed}
-[red]Fail:[/red] {self.failed}
-[yellow]Speed:[/yellow] {self.speed:.1f} IPs/sec
-[yellow]Elapsed:[/yellow] {self.elapsed:.1f}s
-"""
-
+        return f"""[b white]📊 SCANNER DASHBOARD 🐶[/b white]  [dim]⏰ Time: {self.elapsed:.1f}s[/dim]
+    🔍 Scanned: {self.scanned:,} / {self.total:,}  [dim]🕒 ETA: {eta_str}[/dim]
+    🎉 Found: {self.found:,}  ✅ Passed: {self.passed:,}  ❌ Failed: {self.failed:,}
+    🚀 Speed: {self.speed:.0f} IPs/s  📈 Avg Response: {avg_time_str}"""
 
 class CustomProgressBar(Static):
     """Custom progress bar with ▓▒ style and float percentage."""
@@ -724,7 +722,14 @@ class CustomProgressBar(Static):
         """Update progress values."""
         self.progress = progress
         self.total = total
+        
+class CurrentRange(Static):
+    """Live display of the subnet/range currently being scanned."""
 
+    range_text = reactive("Initializing...")
+
+    def render(self) -> str:
+        return f"📡 [bold cyan]Scanning:[/bold cyan] [white]{self.range_text}[/white]"
 
 class DNSScannerTUI(App):
     """PYDNS Scanner with Textual TUI."""
@@ -733,39 +738,77 @@ class DNSScannerTUI(App):
     ENABLE_COMMAND_PALETTE = False  # Disable command palette
 
     CSS = """
-    Screen {
+    Screen:light {
+        background: #ffffff;
+    }
+    
+    Screen:dark {
         background: #0d1117;
     }
     
-    /* Dark theme colors */
-    Header {
+    Header:light {
+        background: #f6f8fa;
+        color: #0969da;
+    }
+    
+    Header:dark {
         background: #161b22;
         color: #58a6ff;
     }
     
-    Footer {
+    Footer:light {
+        background: #f6f8fa;
+        color: #57606a;
+    }
+    
+    Footer:dark {
         background: #161b22;
         color: #8b949e;
     }
     
-    Footer > .footer--key {
+    Footer:light > .footer--key {
+        background: #ffffff;
+        color: #0969da;
+    }
+    
+    Footer:dark > .footer--key {
         background: #21262d;
         color: #58a6ff;
     }
     
-    Footer > .footer--description {
+    Footer:light > .footer--description {
+        color: #24292f;
+    }
+    
+    Footer:dark > .footer--description {
         color: #c9d1d9;
     }
     
-    /* Start Screen Styles */
-    #start-screen {
+    #start-screen:light {
+        width: 100%;
+        height: 100%;
+        background: #ffffff;
+        padding: 1;
+    }
+    
+    #start-screen:dark {
         width: 100%;
         height: 100%;
         background: #0d1117;
         padding: 1;
     }
     
-    #start-form {
+    #start-form:light {
+        width: 100%;
+        height: auto;
+        max-height: 100%;
+        border: solid #d0d7de;
+        background: #f6f8fa;
+        padding: 2;
+        overflow-y: auto;
+    }
+    
+    #start-form:dark {
         width: 100%;
         height: auto;
         max-height: 100%;
@@ -775,7 +818,15 @@ class DNSScannerTUI(App):
         overflow-y: auto;
     }
     
-    #start-title {
+    #start-title:light {
+        width: 100%;
+        text-align: center;
+        text-style: bold;
+        color: #0969da;
+        padding: 1;
+    }
+    
+    #start-title:dark {
         width: 100%;
         text-align: center;
         text-style: bold;
@@ -790,7 +841,13 @@ class DNSScannerTUI(App):
         margin: 1 0;
     }
     
-    .form-label {
+    .form-label:light {
+        width: 20;
+        padding: 0 1;
+        color: #24292f;
+    }
+    
+    .form-label:dark {
         width: 20;
         padding: 0 1;
         color: #c9d1d9;
@@ -800,18 +857,39 @@ class DNSScannerTUI(App):
         width: 1fr;
     }
     
-    Input {
+    Input:light {
+        background: #ffffff;
+        border: solid #d0d7de;
+        color: #24292f;
+        height: 3;
+    }
+    
+    Input:dark {
         background: #21262d;
         border: solid #30363d;
         color: #c9d1d9;
         height: 3;
     }
     
-    Input:focus {
+    Input:light:focus {
+        border: solid #0969da;
+    }
+    
+    Input:dark:focus {
         border: solid #58a6ff;
     }
     
-    #file-browser-container {
+    #file-browser-container:light {
+        width: 100%;
+        height: 10;
+        max-height: 15;
+        border: solid #1f883d;
+        background: #f6f8fa;
+        margin: 1 0;
+        display: none;
+    }
+    
+    #file-browser-container:dark {
         width: 100%;
         height: 10;
         max-height: 15;
@@ -821,17 +899,33 @@ class DNSScannerTUI(App):
         display: none;
     }
     
-    DirectoryTree {
+    DirectoryTree:light {
+        height: 100%;
+        background: #f6f8fa;
+        color: #24292f;
+    }
+    
+    DirectoryTree:dark {
         height: 100%;
         background: #161b22;
         color: #c9d1d9;
     }
     
-    DirectoryTree:focus > .directory-tree--folder {
+    DirectoryTree:light:focus > .directory-tree--folder {
+        color: #0969da;
+    }
+    
+    DirectoryTree:dark:focus > .directory-tree--folder {
         color: #58a6ff;
     }
     
-    Select {
+    Select:light {
+        width: 1fr;
+        background: #ffffff;
+        border: solid #d0d7de;
+    }
+    
+    Select:dark {
         width: 1fr;
         background: #21262d;
         border: solid #30363d;
@@ -841,47 +935,96 @@ class DNSScannerTUI(App):
         height: auto;
     }
     
-    SelectCurrent {
+    SelectCurrent:light {
+        background: #ffffff;
+        color: #24292f;
+        padding: 0 1;
+    }
+    
+    SelectCurrent:dark {
         background: #21262d;
         color: #c9d1d9;
         padding: 0 1;
     }
     
-    Select > SelectOverlay {
+    Select:light > SelectOverlay {
+        background: #f6f8fa;
+        border: solid #0969da;
+        width: 100%;
+    }
+    
+    Select:dark > SelectOverlay {
         background: #161b22;
         border: solid #58a6ff;
         width: 100%;
     }
     
-    Select > SelectOverlay > OptionList {
+    Select:light > SelectOverlay > OptionList {
+        background: #f6f8fa;
+        color: #24292f;
+        padding: 0;
+        height: auto;
+    }
+    
+    Select:dark > SelectOverlay > OptionList {
         background: #161b22;
         color: #c9d1d9;
         padding: 0;
         height: auto;
     }
     
-    Select > SelectOverlay > OptionList > .option-list--option {
+    Select:light > SelectOverlay > OptionList > .option-list--option {
+        padding: 0 1;
+        background: #f6f8fa;
+        color: #24292f;
+    }
+    
+    Select:dark > SelectOverlay > OptionList > .option-list--option {
         padding: 0 1;
         background: #161b22;
         color: #c9d1d9;
     }
     
-    Select > SelectOverlay > OptionList > .option-list--option-highlighted {
+    Select:light > SelectOverlay > OptionList > .option-list--option-highlighted {
+        background: #d0d7de;
+        color: #0969da;
+    }
+    
+    Select:dark > SelectOverlay > OptionList > .option-list--option-highlighted {
         background: #30363d;
         color: #58a6ff;
     }
     
-    Select > SelectOverlay > OptionList > .option-list--option-hover {
+    Select:light > SelectOverlay > OptionList > .option-list--option-hover {
+        background: #eaeef2;
+    }
+    
+    Select:dark > SelectOverlay > OptionList > .option-list--option-hover {
         background: #21262d;
     }
     
-    #progress-container {
+    #progress-container:light {
+        width: 100%;
+        height: 3;
+        margin: 0 1;
+        border: solid #d0d7de;
+        background: #f6f8fa;
+        padding: 0 1;
+    }
+    
+    #progress-container:dark {
         width: 100%;
         height: 3;
         margin: 0 1;
         border: solid #30363d;
         background: #161b22;
         padding: 0 1;
+    }
+
+    #range-container {
+        width: 100%;
+        height: 1;
+        margin: 1 1 0 1;
     }
 
     #start-buttons {
@@ -899,14 +1042,29 @@ class DNSScannerTUI(App):
         margin: 0;
     }
     
-    /* Scan Screen Styles */
-    #scan-screen {
+    #scan-screen:light {
+        width: 100%;
+        height: 100%;
+        background: #ffffff;
+    }
+    
+    #scan-screen:dark {
         width: 100%;
         height: 100%;
         background: #0d1117;
     }
 
-    #stats {
+    #stats:light {
+        width: 100%;
+        height: auto;
+        border: solid #1f883d;
+        background: #f6f8fa;
+        padding: 1;
+        margin: 1;
+        color: #24292f;
+    }
+    
+    #stats:dark {
         width: 100%;
         height: auto;
         border: solid #238636;
@@ -923,12 +1081,21 @@ class DNSScannerTUI(App):
         content-align: center middle;
     }
     
-    ProgressBar > .bar--bar {
+    ProgressBar:light > .bar--bar {
+        color: #1f883d;
+        background: #eaeef2;
+    }
+    
+    ProgressBar:dark > .bar--bar {
         color: #238636;
         background: #21262d;
     }
     
-    ProgressBar > .bar--complete {
+    ProgressBar:light > .bar--complete {
+        color: #1f883d;
+    }
+    
+    ProgressBar:dark > .bar--complete {
         color: #238636;
     }
 
@@ -937,7 +1104,15 @@ class DNSScannerTUI(App):
         height: 1fr;
     }
 
-    #results {
+    #results:light {
+        width: 60%;
+        height: 100%;
+        border: solid #0969da;
+        background: #f6f8fa;
+        margin: 1;
+    }
+    
+    #results:dark {
         width: 60%;
         height: 100%;
         border: solid #58a6ff;
@@ -945,7 +1120,15 @@ class DNSScannerTUI(App):
         margin: 1;
     }
 
-    #logs {
+    #logs:light {
+        width: 40%;
+        height: 100%;
+        border: solid #9a6700;
+        background: #f6f8fa;
+        margin: 1;
+    }
+    
+    #logs:dark {
         width: 40%;
         height: 100%;
         border: solid #d29922;
@@ -960,65 +1143,127 @@ class DNSScannerTUI(App):
         align: center middle;
     }
 
-    Button {
+    Button:light {
+        margin: 0 1;
+        background: #f6f8fa;
+        color: #24292f;
+        border: solid #d0d7de;
+    }
+    
+    Button:dark {
         margin: 0 1;
         background: #21262d;
         color: #c9d1d9;
         border: solid #30363d;
     }
     
-    Button:hover {
+    Button:light:hover {
+        background: #d0d7de;
+        color: #0969da;
+    }
+    
+    Button:dark:hover {
         background: #30363d;
         color: #58a6ff;
     }
     
-    Button:focus {
+    Button:light:focus {
+        border: solid #0969da;
+    }
+    
+    Button:dark:focus {
         border: solid #58a6ff;
     }
     
-    Button.-primary {
+    Button:light.-primary {
+        background: #1f883d;
+        color: #ffffff;
+        border: solid #1f883d;
+    }
+    
+    Button:dark.-primary {
         background: #238636;
         color: #ffffff;
         border: solid #238636;
     }
     
-    Button.-primary:hover {
+    Button:light.-primary:hover {
+        background: #2c974b;
+    }
+    
+    Button:dark.-primary:hover {
         background: #2ea043;
     }
 
-    DataTable {
+    DataTable:light {
+        height: 100%;
+        background: #f6f8fa;
+    }
+    
+    DataTable:dark {
         height: 100%;
         background: #161b22;
     }
     
-    DataTable > .datatable--header {
+    DataTable:light > .datatable--header {
+        background: #eaeef2;
+        color: #0969da;
+        text-style: bold;
+    }
+    
+    DataTable:dark > .datatable--header {
         background: #21262d;
         color: #58a6ff;
         text-style: bold;
     }
     
-    DataTable > .datatable--cursor {
+    DataTable:light > .datatable--cursor {
+        background: #d0d7de;
+        color: #24292f;
+    }
+    
+    DataTable:dark > .datatable--cursor {
         background: #30363d;
         color: #c9d1d9;
     }
     
-    DataTable > .datatable--hover {
+    DataTable:light > .datatable--hover {
+        background: #eaeef2;
+    }
+    
+    DataTable:dark > .datatable--hover {
         background: #21262d;
     }
 
-    RichLog {
+    RichLog:light {
+        height: 100%;
+        background: #f6f8fa;
+        color: #24292f;
+    }
+    
+    RichLog:dark {
         height: 100%;
         background: #161b22;
         color: #c9d1d9;
     }
     
-    Checkbox {
+    Checkbox:light {
+        background: transparent;
+        color: #24292f;
+        margin-right: 2;
+    }
+    
+    Checkbox:dark {
         background: transparent;
         color: #c9d1d9;
         margin-right: 2;
     }
     
-    Checkbox:focus > .toggle--button {
+    Checkbox:light:focus > .toggle--button {
+        background: #0969da;
+    }
+    
+    Checkbox:dark:focus > .toggle--button {
         background: #58a6ff;
     }
     
@@ -1051,7 +1296,8 @@ class DNSScannerTUI(App):
         self.proxy_auth_enabled = False  # Proxy authentication
         self.proxy_username = ""  # Proxy username
         self.proxy_password = ""  # Proxy password
-
+        self.ignore_censorship = False  # Ignore censorship IPs (new)
+        
         # Config file for caching settings
         self.config_dir = Path.home() / ".pydns-scanner"
         self.config_file = self.config_dir / "config.json"
@@ -1061,6 +1307,7 @@ class DNSScannerTUI(App):
         self.slipstream_domain = ""
         self.found_servers: Set[str] = set()  # Keep found servers for results
         self.server_times: dict[str, float] = {}
+        self.total_response_time: float = 0.0
         self.proxy_results: dict[str, str] = (
             {}
         )  # IP -> "Success", "Failed", or "Testing"
@@ -1094,8 +1341,10 @@ class DNSScannerTUI(App):
 
         # Shuffle support
         self.remaining_ips: list = []  # Track remaining IPs for shuffle feature
-        # Note: tested_ips removed for better memory management - only used temporarily during shuffle
-
+        self.tested_ips: Set[str] = set()   # ← NEW: fixes shuffle bug
+        self.resolved_ips: dict[str, str] = {}   # ← NEW: stores what IP the DNS returned
+        self.has_saved_state = Path('scan_state.json').exists()
+        
     def compose(self) -> ComposeResult:
         """Create child widgets."""
         yield Header(show_clock=False)
@@ -1104,11 +1353,10 @@ class DNSScannerTUI(App):
         with Container(id="start-screen"):
             with Vertical(id="start-form"):
                 yield Static(
-                    "[b cyan]PYDNS Scanner Configuration[/b cyan]", id="start-title"
+                    "[b cyan]📡 PYDNS Scanner Configuration ✨[/b cyan]", id="start-title"  # Added scanning antenna and sparkle for cuteness
                 )
-
                 with Horizontal(classes="form-row"):
-                    yield Label("CIDR File:", classes="form-label")
+                    yield Label("📂 CIDR File:", classes="form-label")
                     yield Select(
                         [("Iran IPs (~10M IPs)", "iran"), ("Custom File...", "custom")],
                         value="iran",
@@ -1121,7 +1369,7 @@ class DNSScannerTUI(App):
                     yield PlainDirectoryTree(".", id="file-browser")
 
                 with Horizontal(classes="form-row"):
-                    yield Label("Domain:", classes="form-label")
+                    yield Label("🌐 Domain:", classes="form-label")
                     yield Input(
                         placeholder="e.g., google.com",
                         id="input-domain",
@@ -1129,7 +1377,7 @@ class DNSScannerTUI(App):
                     )
 
                 with Horizontal(classes="form-row"):
-                    yield Label("Proxy Auth:", classes="form-label")
+                    yield Label("🔑 Proxy Auth:", classes="form-label")
                     yield Checkbox("Enable", id="input-proxy-auth")
 
                 with Container(id="proxy-auth-container"):
@@ -1150,7 +1398,7 @@ class DNSScannerTUI(App):
                         )
 
                 with Horizontal(classes="form-row"):
-                    yield Label("DNS Type:", classes="form-label")
+                    yield Label("🔍 DNS Type:", classes="form-label")
                     yield Select(
                         [
                             ("A (IPv4)", "A"),
@@ -1166,7 +1414,7 @@ class DNSScannerTUI(App):
                     )
 
                 with Horizontal(classes="form-row"):
-                    yield Label("Concurrency:", classes="form-label")
+                    yield Label("⚡ Concurrency:", classes="form-label")
                     yield Input(
                         placeholder="100",
                         id="input-concurrency",
@@ -1175,32 +1423,43 @@ class DNSScannerTUI(App):
                     )
 
                 with Horizontal(classes="form-row checkbox-row"):
-                    yield Checkbox("Random Subdomain", id="input-random")
-                    yield Checkbox("Proxy Test", id="input-slipstream")
-                    yield Checkbox("Bell on Pass", id="input-bell")
+                    yield Checkbox("🎲 Random Subdomain", id="input-random")  # Dice for random
+                    yield Checkbox("🛡️ Proxy Test", id="input-slipstream")  # Shield for test
+                    yield Checkbox("🔔 Bell on Pass", id="input-bell")  # Bell emoji
+                    yield Checkbox("🚫 Ignore Censorship IPs", id="input-ignore-censorship")
 
                 with Horizontal(id="start-buttons"):
-                    yield Button("Start Scan", id="start-scan-btn", variant="success")
-                    yield Button("Exit", id="exit-btn", variant="error")
+                    if self.has_saved_state:
+                        yield Button("▶ Resume Scan", id="resume-state-btn", variant="primary")
+                        yield Button("🆕 New Scan", id="new-scan-btn", variant="warning")
+                    yield Button("🚀 Start Scan", id="start-scan-btn", variant="success")
+                    yield Button("🚪 Exit", id="exit-btn", variant="error")
 
         # Scan Screen (initially hidden)
         with Container(id="scan-screen"):
+            # The CSS grid handles placement automatically based on order
             yield StatsWidget(id="stats")
+            
             with Container(id="progress-container"):
                 yield CustomProgressBar(id="progress-bar")
+                
+            with Container(id="range-container"):
+                yield CurrentRange(id="current-range")
+                
             with Horizontal(id="main-content"):
                 with Container(id="results"):
                     yield DataTable(id="results-table")
                 with Container(id="logs"):
                     yield RichLog(id="log-display", highlight=True, markup=True)
+            
+            # Controls are docked at bottom in CSS, but we keep them here
             with Horizontal(id="controls"):
-                yield Button("⏸  Pause", id="pause-btn", variant="warning")
+                yield Button("⏸ Pause", id="pause-btn", variant="warning")
                 yield Button("🔀 Shuffle", id="shuffle-btn", variant="default")
-                yield Button("▶  Resume", id="resume-btn", variant="primary")
-                yield Button("Save Results", id="save-btn", variant="success")
-                yield Button("Quit", id="quit-btn", variant="error")
-
-        yield Footer()
+                yield Button("▶ Resume", id="resume-btn", variant="primary")
+                yield Button("✅ Save", id="save-btn", variant="success")  # Added cute emoji for professionalism
+                yield Button("❌ Quit", id="quit-btn", variant="error")  # Added cute emoji for professionalism
+            yield Footer()
 
     def _load_cached_domain(self) -> str:
         """Load last used domain from config file."""
@@ -1265,7 +1524,12 @@ class DNSScannerTUI(App):
 
         # Setup results table
         table = self.query_one("#results-table", DataTable)
-        table.add_columns("IP Address", "Response Time", "Status", "Proxy Test")
+        table.add_column("IP Address")
+        table.add_column("Response Time")
+        table.add_column("Status")
+        table.add_column("Proxy Test")
+        table.add_column("Resolved IP", width=25) # Width is only allowed on single add_column
+        table.cursor_type = "row"
         table.cursor_type = "row"
 
         # Hide pause/resume/shuffle buttons initially
@@ -1276,8 +1540,20 @@ class DNSScannerTUI(App):
         except Exception as e:
             logger.debug(f"Could not hide buttons during mount: {e}")
 
+        # NEW: rebuild table only every 5 seconds → no lag when clicking buttons
+        self.set_interval(5.0, self._periodic_table_rebuild)
+        self.set_interval(300.0, self._save_state)  # Auto-save every 5 minutes
+        
+    def _periodic_table_rebuild(self) -> None:
+        """Rebuild table periodically so we don't freeze the UI."""
+        if self.table_needs_rebuild:
+            self._rebuild_table()
+            self.table_needs_rebuild = False
+
     def action_quit(self) -> None:
         """Gracefully quit the application with proper cleanup."""
+        # Signal shutdown to stop any running scans
+        self._save_state()  # Auto-save on quit
         # Signal shutdown to stop any running scans
         if self._shutdown_event:
             self._shutdown_event.set()
@@ -1421,6 +1697,12 @@ class DNSScannerTUI(App):
                 self.action_save_results()
             elif event.button.id == "quit-btn":
                 self.action_quit()
+            elif event.button.id == "resume-state-btn":
+                self._load_state()
+                self._start_scan_from_form()  # Resume with loaded state
+            elif event.button.id == "new-scan-btn":
+                Path('scan_state.json').unlink(missing_ok=True)
+                self._start_scan_from_form()  # Start fresh
         finally:
             if event.button.id in [
                 "start-scan-btn",
@@ -1503,6 +1785,7 @@ class DNSScannerTUI(App):
 
         # Update keybinding visibility
         self._update_keybinding_visibility(scanning=True, paused=True)
+        self._save_state()
 
     def _resume_scan(self) -> None:
         """Resume the paused scan."""
@@ -1529,7 +1812,7 @@ class DNSScannerTUI(App):
 
         # Update keybinding visibility
         self._update_keybinding_visibility(scanning=True, paused=False)
-
+        
     def _start_scan_from_form(self) -> None:
         """Get values from form and start scanning."""
         # Get form values
@@ -1540,6 +1823,7 @@ class DNSScannerTUI(App):
         random_checkbox = self.query_one("#input-random", Checkbox)
         slipstream_checkbox = self.query_one("#input-slipstream", Checkbox)
         bell_checkbox = self.query_one("#input-bell", Checkbox)
+        ignore_censorship_checkbox = self.query_one("#input-ignore-censorship", Checkbox)
 
         # Determine CIDR file based on dropdown selection
         cidr_value = str(cidr_select.value) if cidr_select.value else "iran"
@@ -1579,7 +1863,8 @@ class DNSScannerTUI(App):
         self.random_subdomain = random_checkbox.value
         self.test_slipstream = slipstream_checkbox.value
         self.bell_sound_enabled = bell_checkbox.value
-
+        self.ignore_censorship = ignore_censorship_checkbox.value
+        
         # Get proxy auth settings
         proxy_auth_checkbox = self.query_one("#input-proxy-auth", Checkbox)
         self.proxy_auth_enabled = proxy_auth_checkbox.value
@@ -1762,10 +2047,11 @@ class DNSScannerTUI(App):
         self.found_servers.clear()
         self.server_times.clear()
         self.proxy_results.clear()
+        self.tested_ips.clear()                    
         self.current_scanned = 0
         self.table_needs_rebuild = False
         self.remaining_ips.clear()
-        # tested_ips removed for better memory management
+        self.recent_ranges = deque(maxlen=3)  # Keep track of multiple active ranges
 
         # Force garbage collection after clearing large structures
         gc.collect()
@@ -1835,23 +2121,36 @@ class DNSScannerTUI(App):
         self._log("[green]Starting memory-efficient streaming scan...[/green]")
         await asyncio.sleep(0)
 
-        chunk_size = 500  # Process 500 IPs at a time
+        chunk_size = 100  # Process 100 IPs at a time
         active_tasks = []
         chunk_num = 0
 
         # Stream IPs efficiently without loading all into memory
-        async for ip_chunk in self._stream_ips_from_file():
-            # Check for shutdown
+        async for data in self._stream_ips_from_file():
             if self._shutdown_event and self._shutdown_event.is_set():
                 break
 
-            # Check for pause
+            # Unpack (ip_chunk, current_range)
+            if isinstance(data, tuple) and len(data) == 2:
+                ip_chunk, current_range = data
+            else:
+                ip_chunk, current_range = data, "Unknown"
+
+            # ← NEW: show which ranges are scanning
+            if current_range not in self.recent_ranges:
+                self.recent_ranges.append(current_range)
+
+            try:
+                range_w = self.query_one("#current-range", CurrentRange)
+                range_w.range_text = " | ".join(self.recent_ranges)
+            except Exception:
+                pass
+
             await self.pause_event.wait()
 
-            # After resume, if user shuffled, switch to shuffled mode
             if self.remaining_ips:
                 self._log("[cyan]Switching to shuffled IP scanning mode...[/cyan]")
-                break  # Exit streaming loop to handle shuffled IPs below
+                break
 
             chunk_num += 1
 
@@ -2144,20 +2443,15 @@ class DNSScannerTUI(App):
         logger.info(f"Loaded {len(subnets)} subnets")
         return subnets
 
-    async def _stream_ips_from_file(self) -> AsyncGenerator[list[str], None]:
-        """Stream IPs from CIDR file in chunks without loading everything into memory.
-
-        Memory-efficient streaming approach that only loads IPs into remaining_ips
-        when shuffle functionality is actually needed.
-        """
-        chunk = []
-        chunk_size = 500  # Yield 500 IPs at a time
+    async def _stream_ips_from_file(self) -> AsyncGenerator[tuple[list[str], str], None]:
+        """Stream IPs from CIDR file in chunks + show current range."""
+        chunk: list[str] = []
+        chunk_size = 100
         rng = secrets.SystemRandom()
 
         loop = asyncio.get_event_loop()
 
         def read_and_process():
-            """Blocking function to read file and yield subnet chunks."""
             subnets = []
             try:
                 with open(self.subnet_file, "r", encoding="utf-8") as f:
@@ -2167,76 +2461,75 @@ class DNSScannerTUI(App):
                             try:
                                 subnet = ipaddress.IPv4Network(line, strict=False)
                                 subnets.append(subnet)
-                            except (
-                                ipaddress.AddressValueError,
-                                ipaddress.NetmaskValueError,
-                                ValueError,
-                            ):
-                                # Invalid CIDR - skip it silently (common in user-provided files)
+                            except Exception:
                                 pass
-            except (OSError, IOError) as e:
+            except Exception as e:
                 logger.error(f"Failed to read subnet file: {e}")
             return subnets
 
-        # Read subnets
         subnets = await loop.run_in_executor(None, read_and_process)
         rng.shuffle(subnets)
 
-        # Generate IPs from subnets - stream them efficiently
         for net in subnets:
-            # Split into /24 chunks
             if net.prefixlen >= 24:
                 chunks = [net]
             else:
                 chunks = list(net.subnets(new_prefix=24))
-
             rng.shuffle(chunks)
 
             for subnet_chunk in chunks:
+                current_range = str(subnet_chunk)
+
                 if subnet_chunk.num_addresses == 1:
-                    ip_str = str(subnet_chunk.network_address)
-                    chunk.append(ip_str)
+                    chunk.append(str(subnet_chunk.network_address))
+                    if len(chunk) >= chunk_size:
+                        yield chunk, current_range
+                        chunk = []
                 else:
                     ips = list(subnet_chunk.hosts())
                     rng.shuffle(ips)
                     for ip in ips:
-                        ip_str = str(ip)
-                        chunk.append(ip_str)
-
-                        # Yield chunk when it reaches size
+                        chunk.append(str(ip))
                         if len(chunk) >= chunk_size:
-                            yield chunk
+                            yield chunk, current_range
                             chunk = []
-                            await asyncio.sleep(0)  # Yield to event loop
+                            await asyncio.sleep(0)
 
-        # Yield remaining IPs
         if chunk:
-            yield chunk
+            yield chunk, current_range
 
     async def _test_dns_with_callback(
         self, ip: str, sem: asyncio.Semaphore
-    ) -> tuple[str, bool, float]:
-        """Test DNS and return result tuple."""
+    ) -> tuple[str, bool, float, str]:
+        """Test DNS and return result tuple (now includes resolved IP)."""
         # Wait if paused
         await self.pause_event.wait()
         return await self._test_dns(ip, sem)
 
-    async def _process_result(self, result: tuple[str, bool, float]) -> None:
-        """Process a single DNS test result."""
-        if isinstance(result, tuple):
-            ip, is_valid, response_time = result
+    async def _process_result(self, result: tuple[str, bool, float, str]) -> None:
+        """Process a single DNS test result (now includes resolved IP)."""
+        if isinstance(result, tuple) and len(result) >= 3:
+            ip = result[0]
+            is_valid = result[1]
+            response_time = result[2]
+            resolved = result[3] if len(result) == 4 else "N/A"
 
-            # Update scanned count (no longer tracking tested_ips for memory efficiency)
             self.current_scanned += 1
+            self.tested_ips.add(ip)
 
             if is_valid:
-                # Add to found servers and table immediately
-                self._add_result(ip, response_time)
-                self._log(
-                    f"[green]✓ Found DNS: {ip} ({response_time*1000:.0f}ms)[/green]"
-                )
+                # New: Skip if ignore_censorship is enabled and resolved is a censorship IP
+                if self.ignore_censorship and "10.10.34." in resolved:
+                    self._log(
+                        f"[yellow]Ignored censorship DNS: {ip} ({response_time*1000:.0f}ms) → {resolved}[/yellow]"
+                    )
+                    return  # Skip adding to results
 
-                # Queue slipstream test if enabled (non-blocking)
+                self.resolved_ips[ip] = resolved
+                self.total_response_time += response_time  # New: Track for average
+                self._add_result(ip, response_time, resolved)
+                self._log(f"[green]🐶 ✓ Found DNS: {ip} ({response_time*1000:.0f}ms) → {resolved}[/green]")
+
                 if self.test_slipstream:
                     self.proxy_results[ip] = "Pending"
                     task = asyncio.create_task(self._queue_slipstream_test(ip))
@@ -2260,15 +2553,18 @@ class DNSScannerTUI(App):
                     stats.failed = len(
                         [ip for ip, r in self.proxy_results.items() if r == "Failed"]
                     )
+                    # New: Update average response time
+                    stats.average_time = (
+                        self.total_response_time / stats.found if stats.found > 0 else 0.0
+                    )
 
                     progress_bar = self.query_one("#progress-bar", CustomProgressBar)
                     progress_bar.update_progress(self.current_scanned, stats.total)
                 except Exception as e:
                     logger.debug(f"Could not update stats during scan: {e}")
 
-                # Periodic garbage collection every 1000 scans to prevent memory buildup
                 if self.current_scanned % 1000 == 0:
-                    gc.collect(generation=0)  # Fast generation-0 collection
+                    gc.collect(generation=0)
 
     def _collect_ips(self, subnets: list[ipaddress.IPv4Network]) -> list[str]:
         """Collect all IPs from subnets in random order using CSPRNG."""
@@ -2306,73 +2602,112 @@ class DNSScannerTUI(App):
 
     async def _test_dns(
         self, ip: str, sem: asyncio.Semaphore
-    ) -> tuple[str, bool, float]:
-        """Test if IP is a DNS server that responds (even if answer is empty)."""
+    ) -> tuple[str, bool, float, str]:
+        """Test if IP is a working DNS + return real resolved IP."""
         async with sem:
             try:
-                domain = self.domain
-                if self.random_subdomain:
-                    prefix = secrets.token_hex(4)
-                    domain = f"{prefix}.{domain}"
-
-                # 2 second timeout for DNS servers
-                resolver = aiodns.DNSResolver(nameservers=[ip], timeout=2.0, tries=1)
-
+                # Give it slightly more time to account for latency
+                resolver = aiodns.DNSResolver(nameservers=[ip], timeout=4.0, tries=1)
                 start = time.time()
+                
+                target_domain = self.domain
+                is_random = self.random_subdomain
+                query_domain = f"{secrets.token_hex(4)}.{self.domain}" if is_random else self.domain
+                
+                is_valid = False
+                resolved_str = "N/A"
+                elapsed = 0
+
+                # 1. PRIMARY QUERY
                 try:
-                    # Use query method instead of query_dns for better compatibility
-                    result = await resolver.query(domain, self.dns_type)
+                    result = await resolver.query(query_domain, self.dns_type)
                     elapsed = time.time() - start
-
-                    # If we got a result and it's under 2000ms, it's a valid DNS server
-                    if result and elapsed < 2.0:
-                        logger.debug(
-                            f"{ip}: DNS responded - {type(result)} in {elapsed*1000:.0f}ms"
-                        )
-                        return (ip, True, elapsed)
-                    elif result:
-                        # Too slow, reject it
-                        logger.debug(f"{ip}: DNS too slow - {elapsed*1000:.0f}ms")
-                        return (ip, False, 0)
-
-                    # No response
-                    return (ip, False, 0)
-
-                except aiodns.error.DNSError as dns_err:
+                    is_valid = True
+                    logger.debug(f"[{ip}] Primary query success for {query_domain}: {result}")
+                    resolved_str = self._extract_result(result)  # Always extract on success
+                except aiodns.error.DNSError as e:
                     elapsed = time.time() - start
-                    # DNS errors like NXDOMAIN, NODATA, etc. mean the DNS server IS working
-                    # Only connection/timeout errors mean it's not a valid DNS server
-                    error_code = dns_err.args[0] if dns_err.args else 0
+                    error_code = e.args[0] if e.args else 0
+                    logger.debug(f"[{ip}] Primary query failed for {query_domain}: code {error_code}, error: {e}")
+                    
+                    if error_code == 1:  # ENODATA: Domain exists but no record for type
+                        is_valid = True
+                        resolved_str = "No Data"
+                    elif error_code == 4:  # ENOTFOUND: NXDOMAIN
+                        is_valid = True
+                        resolved_str = "NXDOMAIN"
+                    elif error_code == 3:  # ESERVFAIL: Server failed
+                        is_valid = True
+                        resolved_str = "ServFail"
+                    else:
+                        is_valid = False
+                        resolved_str = f"Error:{error_code}"
 
-                    # Error codes that indicate a working DNS server:
-                    # 1 = NXDOMAIN (domain doesn't exist - but DNS is working!)
-                    # 4 = NODATA (no records found - but DNS is working!)
-                    # 3 = NXRRSET (RR type doesn't exist - but DNS is working!)
-                    if error_code in (1, 3, 4) and elapsed < 2.0:
-                        logger.info(
-                            f"{ip}: DNS working with error code {error_code} in {elapsed*1000:.0f}ms"
-                        )
-                        return (ip, True, elapsed)
-                    elif error_code in (1, 3, 4):
-                        # Working but too slow
-                        return (ip, False, 0)
+                # 2. SECONDARY QUERY (Only if random subdomain enabled, to resolve base domain)
+                if is_valid and is_random:
+                    try:
+                        res_result = await resolver.query(target_domain, self.dns_type)
+                        extracted = self._extract_result(res_result)
+                        logger.debug(f"[{ip}] Secondary query success for {target_domain}: {res_result}")
+                        if extracted != "N/A":
+                            resolved_str = extracted
+                    except aiodns.error.DNSError as e:
+                        error_code = e.args[0] if e.args else 0
+                        logger.debug(f"[{ip}] Secondary query failed for {target_domain}: code {error_code}, error: {e}")
+                        if error_code == 4:
+                            resolved_str = "NXDOMAIN"
+                        elif error_code == 1:
+                            resolved_str = "No Data"
+                        elif error_code == 3:
+                            resolved_str = "ServFail"
+                        elif error_code == 6:  # EREFUSED: Query refused
+                            resolved_str = "Refused"
+                        elif error_code == 11:  # ECONNREFUSED: Connection refused
+                            resolved_str = "Conn Refused"
+                        elif error_code == 12:
+                            resolved_str = "Timeout"
+                        else:
+                            resolved_str = f"Error:{error_code}"
+                    except Exception as e:
+                        logger.debug(f"[{ip}] Secondary query unexpected error: {e}")
+                        resolved_str = "Error"
 
-                    # Other DNS errors = not a valid/working DNS server
-                    return (ip, False, 0)
+                return (ip, is_valid, elapsed if is_valid else 0, resolved_str)
 
-            except asyncio.TimeoutError:
-                return (ip, False, 0)
             except Exception as e:
-                # Log unexpected errors but don't crash the scan
-                logger.debug(f"Unexpected error testing DNS {ip}: {e}")
-                return (ip, False, 0)
+                logger.debug(f"[{ip}] Overall DNS test exception: {e}")
+                return (ip, False, 0, "Timed Out")
+    def _extract_result(self, result) -> str:
+        """Robustly extract the IP or Data from various DNS response types."""
+        if not result:
+            return "N/A"
+        try:
+            # If it's a list (A, AAAA, NS records)
+            if isinstance(result, list):
+                parts = []
+                for r in result:
+                    if hasattr(r, "host"): # A, AAAA, NS
+                        parts.append(str(r.host))
+                    elif hasattr(r, "text"): # TXT
+                        val = r.text.decode() if isinstance(r.text, bytes) else str(r.text)
+                        parts.append(val)
+                    else:
+                        parts.append(str(r))
+                return ", ".join(parts[:2]) # Show first 2 results
+            
+            # Single object response
+            if hasattr(result, "host"):
+                return str(result.host)
+            return str(result)
+        except Exception:
+            return "Format Err"
 
-    def _add_result(self, ip: str, response_time: float) -> None:
-        """Add a found server to results immediately, resort periodically."""
+
+    def _add_result(self, ip: str, response_time: float, resolved: str = "N/A") -> None:
+        """Add a found server + what IP it resolved to."""
         self.found_servers.add(ip)
         self.server_times[ip] = response_time
 
-        # Add to table immediately for instant feedback
         try:
             table = self.query_one("#results-table", DataTable)
 
@@ -2384,7 +2719,6 @@ class DNSScannerTUI(App):
             else:
                 server_time_str = f"[red]{server_ms:.0f}ms[/red]"
 
-            # Get proxy status
             proxy_status = self.proxy_results.get(ip, "N/A")
             if proxy_status == "Success":
                 proxy_str = "[green]✓ Passed[/green]"
@@ -2402,18 +2736,12 @@ class DNSScannerTUI(App):
                 server_time_str,
                 "[green]Active[/green]",
                 proxy_str,
+                resolved,          # ← NEW
             )
         except Exception as e:
             logger.debug(f"Could not add result row to table: {e}")
 
-        # Mark table for periodic resort
         self.table_needs_rebuild = True
-
-        # Resort table every 2 seconds to maintain sorted order
-        current_time = time.time()
-        if current_time - self.last_table_update_time >= 2.0:
-            self._rebuild_table()
-            self.last_table_update_time = current_time
 
     def _rebuild_table(self) -> None:
         """Rebuild the entire table with sorted results."""
@@ -2480,6 +2808,7 @@ class DNSScannerTUI(App):
                     server_time_str,
                     "[green]Active[/green]",
                     proxy_str,
+                    self.resolved_ips.get(server_ip, "N/A"),   # ← NEW
                 )
 
             self.table_needs_rebuild = False
@@ -2804,11 +3133,9 @@ class DNSScannerTUI(App):
             )
             self.notify("Loading IPs for shuffle...", severity="information", timeout=3)
 
-            # Temporarily build tested_ips set from found_servers for shuffle logic
+            # Temporarily build tested_ips set (use self.tested_ips for accuracy, as it includes all scanned IPs)
             # This is memory-intensive but only done when shuffle is requested
-            temp_tested_ips = set(
-                self.found_servers
-            )  # Only IPs that were found (much smaller set)
+            temp_tested_ips = set(self.tested_ips)  # Fixed: Use all tested IPs (valid or invalid)
 
             try:
                 # Re-read the file to get all IPs
@@ -2865,70 +3192,35 @@ class DNSScannerTUI(App):
         self.notify(f"Shuffled {untested_count} untested IPs", severity="information")
 
     async def _shuffle_remaining_ips_async(self) -> None:
-        """Async version of shuffle to avoid event loop conflicts."""
+        """Async version of shuffle using tested_ips."""
         if not self.is_paused:
             self.notify("Can only shuffle when paused!", severity="warning")
             return
 
-        # If remaining_ips is empty, we need to build it from untested IPs
         if not self.remaining_ips:
-            self._log(
-                "[yellow]Loading remaining IPs for shuffle (this may use memory for large files)...[/yellow]"
-            )
+            self._log("[yellow]Loading remaining IPs for shuffle...[/yellow]")
             self.notify("Loading IPs for shuffle...", severity="information", timeout=3)
 
-            # Temporarily build tested_ips set from found_servers for shuffle logic
-            temp_tested_ips = set(self.found_servers)
+            all_ips = []
+            async for item in self._stream_ips_from_file():
+                if isinstance(item, tuple):
+                    chunk, _ = item
+                else:
+                    chunk = item
+                all_ips.extend(chunk)
 
-            try:
-                # Re-read the file to get all IPs using the existing async generator
-                all_ips = []
-                async for ip_chunk in self._stream_ips_from_file():
-                    all_ips.extend(ip_chunk)
-
-                # Filter out already found servers
-                self.remaining_ips = [ip for ip in all_ips if ip not in temp_tested_ips]
-
-                # Clear temporary set to free memory
-                del temp_tested_ips
-
-            except (OSError, IOError) as e:
-                self._log(
-                    f"[red]Failed to load IPs for shuffle (file error): {e}[/red]"
-                )
-                logger.error(f"Async shuffle failed to load IPs: {e}")
-                self.notify("Shuffle failed - unable to load IPs", severity="error")
-                return
-            except Exception as e:
-                self._log(f"[red]Failed to load IPs for shuffle: {e}[/red]")
-                logger.error(
-                    f"Unexpected error during async shuffle: {e}", exc_info=True
-                )
-                self.notify("Shuffle failed - unexpected error", severity="error")
-                return
+            self.remaining_ips = [ip for ip in all_ips if ip not in self.tested_ips]
 
         untested_count = len(self.remaining_ips)
-
         if untested_count == 0:
             self.notify("All IPs have been tested!", severity="information")
             return
 
-        # Warn about memory usage for large lists
-        if untested_count > 100000:
-            self._log(
-                f"[yellow]Warning: Shuffling {untested_count} IPs may use significant memory[/yellow]"
-            )
-
-        # Shuffle the remaining untested IPs
         rng = secrets.SystemRandom()
         rng.shuffle(self.remaining_ips)
-
-        # Force garbage collection after shuffle
         gc.collect()
 
-        self._log(
-            f"[cyan]🔀 Shuffled {untested_count} untested IPs (optimized memory usage)[/cyan]"
-        )
+        self._log(f"[cyan]🔀 Shuffled {untested_count} untested IPs[/cyan]")
         self.notify(f"Shuffled {untested_count} untested IPs", severity="information")
 
     def _play_bell_sound(self) -> None:
@@ -3071,6 +3363,44 @@ class DNSScannerTUI(App):
             self._log(f"[red]Failed to save results: {e}[/red]")
             logger.error(f"Failed to auto-save results to {txt_file}: {e}")
 
+    def _save_state(self) -> None:
+        state = {
+            'current_scanned': self.current_scanned,
+            'found_servers': list(self.found_servers),
+            'server_times': self.server_times,
+            'proxy_results': self.proxy_results,
+            'tested_ips': list(self.tested_ips),
+            'remaining_ips': self.remaining_ips,
+            'resolved_ips': self.resolved_ips,
+            'total_response_time': self.total_response_time,
+        }
+        try:
+            with open('scan_state.json', 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=2)
+            self.notify("🦊 State saved! You can resume later.", severity="information")
+        except Exception as e:
+            self.notify(f"😿 Save failed: {e}", severity="error")
+
+    def _load_state(self) -> None:
+        try:
+            with open('scan_state.json', 'r', encoding='utf-8') as f:
+                state = json.load(f)
+            self.current_scanned = state['current_scanned']
+            self.found_servers = set(state['found_servers'])
+            self.server_times = state['server_times']
+            self.proxy_results = state['proxy_results']
+            self.tested_ips = set(state['tested_ips'])
+            self.remaining_ips = state['remaining_ips']
+            self.resolved_ips = state['resolved_ips']
+            self.total_response_time = state['total_response_time']
+            self._rebuild_table()  # Refresh UI
+            self.notify("🐱 State loaded! Resume scanning.", severity="information")
+            # Optionally auto-resume: self._resume_scan()
+        except FileNotFoundError:
+            self.notify("😿 No saved state found!", severity="warning")
+        except Exception as e:
+            self.notify(f"😿 Load failed: {e}", severity="error")
+
     def action_save_results(self) -> None:
         """Save results to file.
 
@@ -3163,7 +3493,10 @@ def main():
 
         logger.info("PYDNS Scanner TUI starting")
 
+        import atexit  # For crash handling
+
         app = DNSScannerTUI()
+        atexit.register(app._save_state)  # Save on crash/exit
         app.run()
 
     except KeyboardInterrupt:
