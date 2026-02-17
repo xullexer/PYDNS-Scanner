@@ -1290,6 +1290,8 @@ class DNSScannerTUI(App):
         self.domain = ""
         self.dns_type = "A"
         self.concurrency = 100
+        self.dns_timeout = 6.0  # Configurable DNS timeout
+        self.proxy_timeout = 20.0  # Configurable proxy timeout
         self.random_subdomain = False
         self.test_slipstream = False
         self.bell_sound_enabled = False  # Bell sound on pass
@@ -1344,6 +1346,7 @@ class DNSScannerTUI(App):
         self.tested_ips: Set[str] = set()   # ← NEW: fixes shuffle bug
         self.resolved_ips: dict[str, str] = {}   # ← NEW: stores what IP the DNS returned
         self.has_saved_state = Path('scan_state.json').exists()
+        self.skip_current_range = False
         
     def compose(self) -> ComposeResult:
         """Create child widgets."""
@@ -1431,8 +1434,9 @@ class DNSScannerTUI(App):
                 with Horizontal(id="start-buttons"):
                     if self.has_saved_state:
                         yield Button("▶ Resume Scan", id="resume-state-btn", variant="primary")
-                        yield Button("🆕 New Scan", id="new-scan-btn", variant="warning")
-                    yield Button("🚀 Start Scan", id="start-scan-btn", variant="success")
+                        yield Button("🆕 Start New", id="new-scan-btn", variant="warning")  # Merged label for clarity
+                    else:
+                        yield Button("🚀 Start Scan", id="start-scan-btn", variant="success")
                     yield Button("🚪 Exit", id="exit-btn", variant="error")
 
         # Scan Screen (initially hidden)
@@ -1456,9 +1460,11 @@ class DNSScannerTUI(App):
             with Horizontal(id="controls"):
                 yield Button("⏸ Pause", id="pause-btn", variant="warning")
                 yield Button("🔀 Shuffle", id="shuffle-btn", variant="default")
+                yield Button("💾 Save State", id="save-state-btn", variant="primary")  # ← NEW: Save State button
+                yield Button("⏭ Skip Range", id="skip-btn", variant="warning")
                 yield Button("▶ Resume", id="resume-btn", variant="primary")
                 yield Button("✅ Save", id="save-btn", variant="success")  # Added cute emoji for professionalism
-                yield Button("❌ Quit", id="quit-btn", variant="error")  # Added cute emoji for professionalism
+                yield Button("❌ Quit", id="quit-btn", variant="error")
             yield Footer()
 
     def _load_cached_domain(self) -> str:
@@ -1543,6 +1549,7 @@ class DNSScannerTUI(App):
         # NEW: rebuild table only every 5 seconds → no lag when clicking buttons
         self.set_interval(5.0, self._periodic_table_rebuild)
         self.set_interval(300.0, self._save_state)  # Auto-save every 5 minutes
+
         
     def _periodic_table_rebuild(self) -> None:
         """Rebuild table periodically so we don't freeze the UI."""
@@ -1552,9 +1559,12 @@ class DNSScannerTUI(App):
 
     def action_quit(self) -> None:
         """Gracefully quit the application with proper cleanup."""
-        # Signal shutdown to stop any running scans
-        self._save_state()  # Auto-save on quit
-        # Signal shutdown to stop any running scans
+        try:
+            self._save_state()  # Save state first if not already in old code
+        except Exception as e:
+            logger.debug(f"Save state failed during quit: {e}")
+
+            # Signal shutdown to stop any running scans
         if self._shutdown_event:
             self._shutdown_event.set()
 
@@ -1567,73 +1577,9 @@ class DNSScannerTUI(App):
                 except (ProcessLookupError, OSError) as e:
                     logger.debug(f"Process already terminated or inaccessible: {e}")
             self.slipstream_processes.clear()
-
-        # Cancel all active scan tasks
-        if hasattr(self, "active_scan_tasks"):
-            for task in self.active_scan_tasks[:]:
-                try:
-                    if not task.done():
-                        task.cancel()
-                except Exception as e:
-                    logger.debug(f"Could not cancel scan task: {e}")
-            self.active_scan_tasks.clear()
-
-        # Cancel all slipstream test tasks
-        if hasattr(self, "slipstream_tasks"):
-            for task in list(self.slipstream_tasks):
-                try:
-                    if not task.done():
-                        task.cancel()
-                except Exception as e:
-                    logger.debug(f"Could not cancel slipstream task: {e}")
-            self.slipstream_tasks.clear()
-
-        # Cancel all Textual workers
-        try:
-            self.workers.cancel_all()
-        except Exception as e:
-            logger.debug(f"Could not cancel workers: {e}")
-
-        # Force garbage collection
-        gc.collect()
-
-        # Restore terminal state before force exit
-        try:
-            # Stop the Textual driver to restore terminal
-            if hasattr(self, "_driver") and self._driver:
-                self._driver.stop_application_mode()
-        except Exception as e:
-            logger.debug(f"Could not stop application mode: {e}")
-
-        # Reset terminal on different platforms
-        if platform.system() == "Windows":
-            # Windows: reset console mode
-            try:
-                import ctypes
-
-                kernel32 = ctypes.windll.kernel32
-                # Get stdout handle
-                handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
-                # Enable virtual terminal processing and restore defaults
-                kernel32.SetConsoleMode(handle, 0x0001 | 0x0002 | 0x0004)
-                # Also restore stdin
-                stdin_handle = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
-                kernel32.SetConsoleMode(stdin_handle, 0x0080 | 0x0001 | 0x0002 | 0x0004)
-                # Show cursor
-                print("\033[?25h", end="", flush=True)
-            except (ImportError, AttributeError, OSError) as e:
-                logger.debug(f"Windows terminal reset failed: {e}")
-        else:
-            # Unix: reset terminal with stty
-            try:
-                subprocess.run(["stty", "sane"], check=False, capture_output=True)
-                print("\033[?25h", end="", flush=True)  # Show cursor
-            except (FileNotFoundError, subprocess.SubprocessError) as e:
-                logger.debug(f"Unix terminal reset failed: {e}")
-
-        # Force exit
-        os._exit(0)
-
+    
+        # Use Textual's clean exit to restore terminal
+        self.exit(0)
     def _update_keybinding_visibility(
         self, scanning: bool = False, paused: bool = False
     ) -> None:
@@ -1664,7 +1610,7 @@ class DNSScannerTUI(App):
             try:
                 start_screen = self.query_one("#start-screen")
                 if start_screen.display:
-                    self._start_scan_from_form()
+                    self._start_scan_from_form(resume=False)
             except Exception as e:
                 logger.debug(f"Could not start scan via keybinding: {e}")
 
@@ -1683,7 +1629,7 @@ class DNSScannerTUI(App):
 
         try:
             if event.button.id == "start-scan-btn":
-                self._start_scan_from_form()
+                self._start_scan_from_form(resume=False)
             elif event.button.id == "exit-btn":
                 self.action_quit()
             elif event.button.id == "pause-btn":
@@ -1693,16 +1639,20 @@ class DNSScannerTUI(App):
             elif event.button.id == "shuffle-btn":
                 # Run async shuffle in worker
                 self.run_worker(self._shuffle_remaining_ips_async(), exclusive=False)
+            elif event.button.id == "save-state-btn": 
+                self._save_state()
+            elif event.button.id == "skip-btn":  
+                self._skip_current_range()
             elif event.button.id == "save-btn":
                 self.action_save_results()
             elif event.button.id == "quit-btn":
                 self.action_quit()
             elif event.button.id == "resume-state-btn":
                 self._load_state()
-                self._start_scan_from_form()  # Resume with loaded state
+                self._start_scan_from_form(resume=True)  # Resume with loaded state
             elif event.button.id == "new-scan-btn":
                 Path('scan_state.json').unlink(missing_ok=True)
-                self._start_scan_from_form()  # Start fresh
+                self._start_scan_from_form(resume=False)  # Start fresh
         finally:
             if event.button.id in [
                 "start-scan-btn",
@@ -1791,7 +1741,17 @@ class DNSScannerTUI(App):
         """Resume the paused scan."""
         if not self.scan_started or not self.is_paused:
             return
-
+        for process in self.slipstream_processes[:]:  # Copy to avoid modification issues
+            try:
+                process.kill()
+                logger.info("Killed lingering slipstream process on resume")
+            except Exception as e:
+                logger.debug(f"Process cleanup on resume: {e}")
+        self.slipstream_processes.clear()
+        self.slipstream_semaphore = asyncio.Semaphore(self.slipstream_max_concurrent)  # Reset semaphore with correct variable
+        self.available_ports = deque(range(self.slipstream_base_port, self.slipstream_base_port + self.slipstream_max_concurrent))  # Reset ports with correct range
+        gc.collect()  # Force GC
+        asyncio.sleep(1)
         # If user shuffled IPs, we need to switch to memory mode for remaining scan
         if self.remaining_ips:
             self._log("[cyan]Resuming with shuffled IP order...[/cyan]")
@@ -1813,7 +1773,17 @@ class DNSScannerTUI(App):
         # Update keybinding visibility
         self._update_keybinding_visibility(scanning=True, paused=False)
         
-    def _start_scan_from_form(self) -> None:
+    def _skip_current_range(self) -> None:
+        """Skip the current subnet/range of IPs being checked (sub-IPs)."""
+        if not self.scan_started or self.is_paused:
+            self.notify("Can only skip during active scanning!", severity="warning")
+            return
+
+        self.skip_current_range = True
+        self._log("[yellow]⏭ Skip requested - current range will be skipped[/yellow]")
+        self.notify("⏭ Skipping current range...", severity="information")
+        
+    def _start_scan_from_form(self, resume: bool = False) -> None:
         """Get values from form and start scanning."""
         # Get form values
         cidr_select = self.query_one("#input-cidr-select", Select)
@@ -1894,7 +1864,7 @@ class DNSScannerTUI(App):
             self.notify(
                 "Checking Slipstream client...", severity="information", timeout=2
             )
-            self.run_worker(self._check_update_and_start_scan(), exclusive=True)
+            self.run_worker(self._check_update_and_start_scan(resume=resume), exclusive=True)
             return
 
         # Switch to scan screen
@@ -1926,9 +1896,9 @@ class DNSScannerTUI(App):
         # Update keybinding visibility for scan mode
         self._update_keybinding_visibility(scanning=True, paused=False)
 
-        self.run_worker(self._scan_async(), exclusive=True)
+        self.run_worker(self._scan_async(resume=resume), exclusive=True)
 
-    async def _check_update_and_start_scan(self) -> None:
+    async def _check_update_and_start_scan(self, resume: bool = False) -> None:
         """Check for slipstream updates and then start the scan."""
         log_widget = self.query_one("#log-display", RichLog)
 
@@ -1980,7 +1950,7 @@ class DNSScannerTUI(App):
         # Update keybinding visibility for scan mode
         self._update_keybinding_visibility(scanning=True, paused=False)
 
-        await self._scan_async()
+        await self._scan_async(resume=resume)
 
     async def _download_and_start_scan(self) -> None:
         """Download slipstream and then start the scan."""
@@ -2023,7 +1993,7 @@ class DNSScannerTUI(App):
             # Update keybinding visibility for scan mode
             self._update_keybinding_visibility(scanning=True, paused=False)
 
-            await self._scan_async()
+            await self._scan_async(resume=False)
         else:
             log_widget.write(
                 "[red]✗ Failed to download Slipstream after multiple retries![/red]"
@@ -2041,16 +2011,18 @@ class DNSScannerTUI(App):
                 "Failed to download Slipstream. Run again to resume.", severity="error"
             )
 
-    async def _scan_async(self) -> None:
+    async def _scan_async(self, resume: bool = False) -> None:
         """Async scanning logic."""
-        # Reset state for re-scanning
-        self.found_servers.clear()
-        self.server_times.clear()
-        self.proxy_results.clear()
-        self.tested_ips.clear()                    
-        self.current_scanned = 0
+        if not resume:
+            # Reset state for re-scanning only if NOT resuming
+            self.found_servers.clear()
+            self.server_times.clear()
+            self.proxy_results.clear()
+            self.tested_ips.clear()
+            self.current_scanned = 0
+            self.remaining_ips.clear()
+        
         self.table_needs_rebuild = False
-        self.remaining_ips.clear()
         self.recent_ranges = deque(maxlen=3)  # Keep track of multiple active ranges
 
         # Force garbage collection after clearing large structures
@@ -2103,7 +2075,7 @@ class DNSScannerTUI(App):
             stats = self.query_one("#stats", StatsWidget)
             stats.total = total_ips
             progress_bar = self.query_one("#progress-bar", CustomProgressBar)
-            progress_bar.update_progress(0, total_ips)
+            progress_bar.update_progress(self.current_scanned, total_ips)
         except Exception as e:
             logger.debug(f"Could not initialize stats widget: {e}")
 
@@ -2121,7 +2093,7 @@ class DNSScannerTUI(App):
         self._log("[green]Starting memory-efficient streaming scan...[/green]")
         await asyncio.sleep(0)
 
-        chunk_size = 100  # Process 100 IPs at a time
+        chunk_size = 250  # Process 100 IPs at a time
         active_tasks = []
         chunk_num = 0
 
@@ -2446,7 +2418,7 @@ class DNSScannerTUI(App):
     async def _stream_ips_from_file(self) -> AsyncGenerator[tuple[list[str], str], None]:
         """Stream IPs from CIDR file in chunks + show current range."""
         chunk: list[str] = []
-        chunk_size = 100
+        chunk_size = 250
         rng = secrets.SystemRandom()
 
         loop = asyncio.get_event_loop()
@@ -2480,30 +2452,60 @@ class DNSScannerTUI(App):
             for subnet_chunk in chunks:
                 current_range = str(subnet_chunk)
 
+                # ← NEW: Check for skip BEFORE processing this sub-range
+                if getattr(self, "skip_current_range", False):
+                    self.skip_current_range = False
+                    self._log(f"[yellow]⏭ Skipped sub-range: {current_range}[/yellow]")
+                    continue  # Skip entire subnet chunk
+
                 if subnet_chunk.num_addresses == 1:
-                    chunk.append(str(subnet_chunk.network_address))
+                    ip_str = str(subnet_chunk.network_address)
+                    if ip_str not in self.tested_ips:
+                        chunk.append(ip_str)
                     if len(chunk) >= chunk_size:
                         yield chunk, current_range
                         chunk = []
+
+                    # Log if skipped
+                    if len(chunk) == 0:
+                        self._log(f"[dim]Skipped {current_range} (already tested)[/dim]")
                 else:
                     ips = list(subnet_chunk.hosts())
                     rng.shuffle(ips)
                     for ip in ips:
-                        chunk.append(str(ip))
+                        # ← NEW: Also check inside large subnets for responsive skip
+                        if getattr(self, "skip_current_range", False):
+                            self.skip_current_range = False
+                            self._log(f"[yellow]⏭ Skipped mid-range: {current_range}[/yellow]")
+                            break  # Break IP loop, go to next subnet
+
+                        str_ip = str(ip)
+                        if str_ip in self.tested_ips:
+                            continue
+                        chunk.append(str_ip)
                         if len(chunk) >= chunk_size:
                             yield chunk, current_range
                             chunk = []
-                            await asyncio.sleep(0)
+                        await asyncio.sleep(0)
 
+                    # Log if entire range skipped
+                    if len(chunk) == 0 and len(ips) > 0:
+                        self._log(f"[dim]Skipped {current_range} (all tested)[/dim]")
+    
         if chunk:
             yield chunk, current_range
-
+    
     async def _test_dns_with_callback(
         self, ip: str, sem: asyncio.Semaphore
     ) -> tuple[str, bool, float, str]:
         """Test DNS and return result tuple (now includes resolved IP)."""
         # Wait if paused
         await self.pause_event.wait()
+        
+        # Don't start new tasks if shutting down
+        if self._shutdown_event and self._shutdown_event.is_set():
+             return (ip, False, 0.0, "Shutdown")
+             
         return await self._test_dns(ip, sem)
 
     async def _process_result(self, result: tuple[str, bool, float, str]) -> None:
@@ -2603,11 +2605,17 @@ class DNSScannerTUI(App):
     async def _test_dns(
         self, ip: str, sem: asyncio.Semaphore
     ) -> tuple[str, bool, float, str]:
-        """Test if IP is a working DNS + return real resolved IP."""
+        """Test if IP is a working DNS + return real resolved IP.
+        Now completely ignores DNS servers that time out on the resolved-IP query.
+        """
         async with sem:
+            # Don't start new work if shutting down
+            if self._shutdown_event and self._shutdown_event.is_set():
+                return (ip, False, 0.0, "Shutdown")
+                
             try:
                 # Give it slightly more time to account for latency
-                resolver = aiodns.DNSResolver(nameservers=[ip], timeout=4.0, tries=1)
+                resolver = aiodns.DNSResolver(nameservers=[ip], timeout=self.dns_timeout, tries=2)
                 start = time.time()
                 
                 target_domain = self.domain
@@ -2644,6 +2652,7 @@ class DNSScannerTUI(App):
                         resolved_str = f"Error:{error_code}"
 
                 # 2. SECONDARY QUERY (Only if random subdomain enabled, to resolve base domain)
+                #    + NEW: If this query times out → treat the DNS as invalid
                 if is_valid and is_random:
                     try:
                         res_result = await resolver.query(target_domain, self.dns_type)
@@ -2654,17 +2663,20 @@ class DNSScannerTUI(App):
                     except aiodns.error.DNSError as e:
                         error_code = e.args[0] if e.args else 0
                         logger.debug(f"[{ip}] Secondary query failed for {target_domain}: code {error_code}, error: {e}")
+                        
                         if error_code == 4:
                             resolved_str = "NXDOMAIN"
                         elif error_code == 1:
                             resolved_str = "No Data"
                         elif error_code == 3:
                             resolved_str = "ServFail"
+                            is_valid = False
                         elif error_code == 6:  # EREFUSED: Query refused
                             resolved_str = "Refused"
                         elif error_code == 11:  # ECONNREFUSED: Connection refused
                             resolved_str = "Conn Refused"
-                        elif error_code == 12:
+                            is_valid = False
+                        elif error_code == 12:  # TIMEOUT on resolved IP
                             resolved_str = "Timeout"
                         else:
                             resolved_str = f"Error:{error_code}"
@@ -2672,11 +2684,19 @@ class DNSScannerTUI(App):
                         logger.debug(f"[{ip}] Secondary query unexpected error: {e}")
                         resolved_str = "Error"
 
+                    # ← NEW: If the resolved-IP query timed out, ignore this DNS server completely
+                    if resolved_str == "Timeout":
+                        is_valid = False
+                        resolved_str = "Timed Out"   # just for logging clarity
+                
+                # Cleanup resolver explicitly to help GC/prevent socket leak
+                resolver = None
                 return (ip, is_valid, elapsed if is_valid else 0, resolved_str)
 
             except Exception as e:
                 logger.debug(f"[{ip}] Overall DNS test exception: {e}")
                 return (ip, False, 0, "Timed Out")
+                
     def _extract_result(self, result) -> str:
         """Robustly extract the IP or Data from various DNS response types."""
         if not result:
@@ -2987,7 +3007,7 @@ class DNSScannerTUI(App):
                 )
                 async with httpx.AsyncClient(
                     proxy=proxy_url,
-                    timeout=15.0,  # Mid-high timeout
+                    timeout=self.proxy_timeout,  # Mid-high timeout
                     follow_redirects=True,
                 ) as client:
                     logger.debug(
@@ -3046,7 +3066,7 @@ class DNSScannerTUI(App):
                     )
                     async with httpx.AsyncClient(
                         proxy=socks5_url,
-                        timeout=15.0,  # Mid-high timeout
+                        timeout=self.proxy_timeout, # Mid-high timeout
                         follow_redirects=True,
                     ) as client:
                         logger.debug(
@@ -3192,29 +3212,31 @@ class DNSScannerTUI(App):
         self.notify(f"Shuffled {untested_count} untested IPs", severity="information")
 
     async def _shuffle_remaining_ips_async(self) -> None:
-        """Async version of shuffle using tested_ips."""
         if not self.is_paused:
             self.notify("Can only shuffle when paused!", severity="warning")
             return
 
         if not self.remaining_ips:
-            self._log("[yellow]Loading remaining IPs for shuffle...[/yellow]")
+            self._log("[yellow]Streaming and filtering untested IPs for shuffle (memory-efficient)...[/yellow]")
             self.notify("Loading IPs for shuffle...", severity="information", timeout=3)
 
-            all_ips = []
+            self.remaining_ips = []  # Build incrementally to avoid huge lists
             async for item in self._stream_ips_from_file():
                 if isinstance(item, tuple):
                     chunk, _ = item
                 else:
                     chunk = item
-                all_ips.extend(chunk)
-
-            self.remaining_ips = [ip for ip in all_ips if ip not in self.tested_ips]
+                # Filter chunk-by-chunk to save memory
+                untested_chunk = [ip for ip in chunk if ip not in self.tested_ips]
+                self.remaining_ips.extend(untested_chunk)
+                gc.collect()  # GC after each chunk to free memory
 
         untested_count = len(self.remaining_ips)
         if untested_count == 0:
             self.notify("All IPs have been tested!", severity="information")
             return
+        if untested_count > 1_000_000:  # Warn for very large shuffles
+            self.notify(f"Warning: Shuffling {untested_count} IPs may use a lot of memory!", severity="warning")
 
         rng = secrets.SystemRandom()
         rng.shuffle(self.remaining_ips)
@@ -3364,17 +3386,17 @@ class DNSScannerTUI(App):
             logger.error(f"Failed to auto-save results to {txt_file}: {e}")
 
     def _save_state(self) -> None:
-        state = {
-            'current_scanned': self.current_scanned,
-            'found_servers': list(self.found_servers),
-            'server_times': self.server_times,
-            'proxy_results': self.proxy_results,
-            'tested_ips': list(self.tested_ips),
-            'remaining_ips': self.remaining_ips,
-            'resolved_ips': self.resolved_ips,
-            'total_response_time': self.total_response_time,
-        }
         try:
+            state = {
+                'current_scanned': self.current_scanned,
+                'found_servers': list(self.found_servers),
+                'server_times': self.server_times,
+                'proxy_results': self.proxy_results,
+                'tested_ips': list(self.tested_ips),
+                'remaining_ips': self.remaining_ips,  # Ensure it's a list
+                'resolved_ips': self.resolved_ips,
+                'total_response_time': self.total_response_time,
+            }
             with open('scan_state.json', 'w', encoding='utf-8') as f:
                 json.dump(state, f, indent=2)
             self.notify("🦊 State saved! You can resume later.", severity="information")
@@ -3390,38 +3412,32 @@ class DNSScannerTUI(App):
             self.server_times = state['server_times']
             self.proxy_results = state['proxy_results']
             self.tested_ips = set(state['tested_ips'])
-            self.remaining_ips = state['remaining_ips']
+            self.remaining_ips = state['remaining_ips']  # List
             self.resolved_ips = state['resolved_ips']
             self.total_response_time = state['total_response_time']
             self._rebuild_table()  # Refresh UI
             self.notify("🐱 State loaded! Resume scanning.", severity="information")
-            # Optionally auto-resume: self._resume_scan()
         except FileNotFoundError:
-            self.notify("😿 No saved state found!", severity="warning")
+            pass  # No notify on startup
+        except json.JSONDecodeError:
+            self.notify("😿 Saved state corrupted!", severity="error")
         except Exception as e:
             self.notify(f"😿 Load failed: {e}", severity="error")
 
     def action_save_results(self) -> None:
         """Save results to file.
 
-        When slipstream testing is enabled, only save DNS servers that passed the proxy test.
+        Always saves only "working" DNS servers (the ones found during the scan).
+        This makes the Save button always save valid/working results, regardless of slipstream.
         """
-        # Filter servers based on test mode
-        if self.test_slipstream:
-            passed_servers = {
-                ip: time
-                for ip, time in self.server_times.items()
-                if self.proxy_results.get(ip) == "Success"
-            }
-            if not passed_servers:
-                self.notify("No servers passed proxy test!", severity="warning")
-                return
-            servers_to_save = passed_servers
-        else:
-            if not self.found_servers:
-                self.notify("No results to save!", severity="warning")
-                return
-            servers_to_save = self.server_times
+        # Filter to always save "working" DNS servers (from server_times)
+        servers_to_save = {
+            ip: time
+            for ip, time in self.server_times.items()
+        }
+        if not servers_to_save:
+            self.notify("No working DNS servers to save!", severity="warning")
+            return
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         output_dir = Path("results")
@@ -3476,7 +3492,7 @@ class DNSScannerTUI(App):
                     f.write(f"{server}\n")
 
             self.notify(
-                f"Saved {len(servers_list)} servers: {json_file.name}",
+                f"Saved {len(servers_list)} working servers: {json_file.name}",
                 severity="information",
             )
             logger.info(f"Results saved to {json_file}")
@@ -3484,7 +3500,25 @@ class DNSScannerTUI(App):
             self.notify(f"Failed to save results: {e}", severity="error")
             logger.error(f"Failed to save results to {json_file}: {e}")
 
-
+    def action_quit(self) -> None:
+        """Gracefully quit and restore the terminal state."""
+        self._save_state()
+    
+        # 1. Signal the scanner to stop immediately
+        if hasattr(self, "_shutdown_event") and self._shutdown_event is not None:
+            self._shutdown_event.set()
+    
+        # 2. Kill background processes
+        if hasattr(self, "slipstream_processes"):
+            for process in self.slipstream_processes:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+            
+        # 3. Use Textual's exit to restore terminal properly
+        self.exit()
+    
 def main():
     """Main entry point."""
     try:
@@ -3499,9 +3533,6 @@ def main():
         atexit.register(app._save_state)  # Save on crash/exit
         app.run()
 
-    except KeyboardInterrupt:
-        logger.info("Interrupted by user")
-        sys.exit(130)
     except Exception as e:
         logger.exception(f"Fatal error: {e}")
         sys.exit(1)
