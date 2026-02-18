@@ -1294,6 +1294,7 @@ class DNSScannerTUI(App):
         self.proxy_timeout = 20.0  # Configurable proxy timeout
         self.random_subdomain = False
         self.test_slipstream = False
+        self.shuffle_lock = asyncio.Lock()
         self.bell_sound_enabled = False  # Bell sound on pass
         self.proxy_auth_enabled = False  # Proxy authentication
         self.proxy_username = ""  # Proxy username
@@ -1470,73 +1471,47 @@ class DNSScannerTUI(App):
                 yield Button("❌ Quit", id="quit-btn", variant="error")
             yield Footer()
 
-    def _load_cached_config(self) -> None:
-        """Load all saved settings from config file."""
+    def _load_cached_domain(self) -> str:
+        """Load last used domain from config file."""
         try:
             if self.config_file.exists():
                 with open(self.config_file, "r", encoding="utf-8") as f:
                     config = json.load(f)
-                    
-                    # Apply settings to widgets
-                    try:
-                        self.query_one("#input-domain", Input).value = config.get("domain", "")
-                        
-                        cidr_select = self.query_one("#input-cidr-select", Select)
-                        cidr_select.value = config.get("cidr_mode", "iran")
-                        
-                        self.selected_cidr_file = config.get("custom_cidr", "")
-                        if cidr_select.value == "custom":
-                            self.query_one("#file-browser-container").display = True
-                            
-                        self.query_one("#input-type", Select).value = config.get("dns_type", "A")
-                        self.query_one("#input-concurrency", Input).value = str(config.get("concurrency", "100"))
-                        
-                        self.query_one("#input-random", Checkbox).value = config.get("random_subdomain", False)
-                        self.query_one("#input-slipstream", Checkbox).value = config.get("test_slipstream", False)
-                        self.query_one("#input-bell", Checkbox).value = config.get("bell_sound", False)
-                        self.query_one("#input-ignore-censorship", Checkbox).value = config.get("ignore_censorship", False)
-                        self.query_one("#input-ignore-errors", Checkbox).value = config.get("ignore_errors", False)
-                        
-                        proxy_auth_chk = self.query_one("#input-proxy-auth", Checkbox)
-                        proxy_auth_chk.value = config.get("proxy_auth", False)
-                        
-                        if proxy_auth_chk.value:
-                            self.query_one("#proxy-auth-container").display = True
-                            self.query_one("#input-proxy-user", Input).value = config.get("proxy_user", "")
-                            self.query_one("#input-proxy-pass", Input).value = config.get("proxy_pass", "")
-                            
-                    except Exception as e:
-                        logger.debug(f"Error applying cached config to widgets: {e}")
+                    return config.get("last_domain", "")
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.debug(f"Config file corrupted or invalid, ignoring: {e}")
+        except (OSError, IOError) as e:
+            logger.debug(f"Failed to read config file: {e}")
         except Exception as e:
-            logger.debug(f"Failed to load config: {e}")
+            logger.warning(f"Unexpected error loading cached domain: {e}")
+        return ""
 
-    def _save_app_config(self) -> None:
-        """Save all current UI settings to config file."""
+    def _save_domain_cache(self, domain: str) -> None:
+        """Save domain to config file for next session."""
         try:
+            # Create config directory if it doesn't exist
             self.config_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Gather values
-            config = {
-                "domain": self.domain,
-                "cidr_mode": "custom" if self.subnet_file == self.selected_cidr_file else "iran",
-                "custom_cidr": self.selected_cidr_file,
-                "dns_type": self.dns_type,
-                "concurrency": self.concurrency,
-                "random_subdomain": self.random_subdomain,
-                "test_slipstream": self.test_slipstream,
-                "bell_sound": self.bell_sound_enabled,
-                "ignore_censorship": self.ignore_censorship,
-                "ignore_errors": self.ignore_errors,
-                "proxy_auth": self.proxy_auth_enabled,
-                "proxy_user": self.proxy_username,
-                "proxy_pass": self.proxy_password
-            }
 
+            # Load existing config or create new
+            config = {}
+            if self.config_file.exists():
+                try:
+                    with open(self.config_file, "r", encoding="utf-8") as f:
+                        config = json.load(f)
+                except (json.JSONDecodeError, OSError):
+                    # Start fresh if config is corrupted
+                    config = {}
+
+            # Update domain
+            config["last_domain"] = domain
+
+            # Save config
             with open(self.config_file, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
-                
+        except (OSError, IOError) as e:
+            logger.debug(f"Failed to save domain cache (permission/IO error): {e}")
         except Exception as e:
-            logger.warning(f"Failed to save app config: {e}")
+            logger.warning(f"Unexpected error saving domain cache: {e}")
 
     def on_mount(self) -> None:
         """Initialize when app is mounted."""
@@ -1549,8 +1524,13 @@ class DNSScannerTUI(App):
         # Hide scan screen initially
         self.query_one("#scan-screen").display = False
 
-        # Load cached settings
-        self._load_cached_config()
+        # Load cached domain and set it
+        cached_domain = self._load_cached_domain()
+        try:
+            domain_input = self.query_one("#input-domain", Input)
+            domain_input.value = cached_domain
+        except Exception as e:
+            logger.debug(f"Could not set cached domain (widget may not be ready): {e}")
 
         # Setup results table
         table = self.query_one("#results-table", DataTable)
@@ -1588,33 +1568,22 @@ class DNSScannerTUI(App):
         except Exception as e:
             logger.debug(f"Save state failed during quit: {e}")
 
-        # Signal shutdown to stop any running scans
+            # Signal shutdown to stop any running scans
         if self._shutdown_event:
             self._shutdown_event.set()
-        
-        # Also cancel active scan tasks immediately
-        if hasattr(self, "active_scan_tasks") and self.active_scan_tasks:
-            for task in self.active_scan_tasks:
-                task.cancel()
 
         # Kill all slipstream processes immediately
         if hasattr(self, "slipstream_processes"):
             for process in self.slipstream_processes[:]:
                 try:
                     if process and hasattr(process, "kill"):
-                        # Redirect output to DEVNULL to avoid terminal corruption
-                        try:
-                            # If it's a Popen object or asyncio subprocess
-                            process.kill()
-                        except:
-                            pass
+                        process.kill()
                 except (ProcessLookupError, OSError) as e:
                     logger.debug(f"Process already terminated or inaccessible: {e}")
             self.slipstream_processes.clear()
     
         # Use Textual's clean exit to restore terminal
         self.exit(0)
-
     def _update_keybinding_visibility(
         self, scanning: bool = False, paused: bool = False
     ) -> None:
@@ -1895,8 +1864,8 @@ class DNSScannerTUI(App):
             self.notify("Please enter a domain!", severity="error")
             return
 
-        # Save all config for next session
-        self._save_app_config()
+        # Save domain for next session
+        self._save_domain_cache(self.domain)
 
         # Check slipstream version and update if needed
         if self.test_slipstream:
@@ -2138,11 +2107,9 @@ class DNSScannerTUI(App):
         self._log("[green]Starting memory-efficient streaming scan...[/green]")
         await asyncio.sleep(0)
 
+        chunk_size = 250  # Process 100 IPs at a time
         active_tasks = []
-        
-        # Limit the number of pending task objects to prevent MemoryError
-        # Keep slightly more than concurrency to keep the pipe full but bounded
-        MAX_PENDING_TASKS = self.concurrency * 2
+        chunk_num = 0
 
         # Stream IPs efficiently without loading all into memory
         async for data in self._stream_ips_from_file():
@@ -2171,6 +2138,8 @@ class DNSScannerTUI(App):
                 self._log("[cyan]Switching to shuffled IP scanning mode...[/cyan]")
                 break
 
+            chunk_num += 1
+
             # Create tasks for this chunk
             for ip in ip_chunk:
                 task = asyncio.create_task(self._test_dns_with_callback(ip, sem))
@@ -2179,35 +2148,35 @@ class DNSScannerTUI(App):
             # Keep reference for cleanup
             self.active_scan_tasks = active_tasks
 
-            # Throttle: Wait if too many tasks are pending to prevent MemoryError
-            # This ensures we don't have 200k Task objects waiting for the semaphore
-            while len(active_tasks) >= MAX_PENDING_TASKS:
-                # Check for pause/shutdown
+            # Process completed tasks periodically
+            if len(active_tasks) >= chunk_size:
+                # Check for pause before processing
                 await self.pause_event.wait()
+
+                # Check for shutdown
                 if self._shutdown_event and self._shutdown_event.is_set():
                     break
 
-                # Wait for at least one task to finish
-                done, pending = await asyncio.wait(
+                # Wait for some tasks to complete
+                done, active_tasks = await asyncio.wait(
                     active_tasks, return_when=asyncio.FIRST_COMPLETED
                 )
 
-                # Process results
+                # Process completed results
                 for task in done:
                     try:
                         result = await task
                         await self._process_result(result)
                     except asyncio.CancelledError:
-                        pass
+                        pass  # Task was cancelled during shutdown
                     except Exception as e:
-                        logger.error(f"Error processing result: {e}")
+                        logger.error(
+                            f"Error processing DNS test result: {e}", exc_info=True
+                        )
 
-                # Update active list
-                active_tasks = list(pending)
+                active_tasks = list(active_tasks)
                 self.active_scan_tasks = active_tasks
-                
-                # Allow UI to update
-                await asyncio.sleep(0)
+                await asyncio.sleep(0)  # Yield to UI
 
         # Handle shuffled IPs if user shuffled during pause
         if self.remaining_ips:
@@ -2217,8 +2186,6 @@ class DNSScannerTUI(App):
 
             # Process shuffled IPs in chunks
             shuffled_index = 0
-            chunk_size = 250
-            
             while shuffled_index < len(self.remaining_ips):
                 # Check for shutdown
                 if self._shutdown_event and self._shutdown_event.is_set():
@@ -2234,20 +2201,20 @@ class DNSScannerTUI(App):
 
                 # Create tasks for this shuffled chunk
                 for ip in shuffled_chunk:
+                    # remaining_ips already contains only untested IPs
                     task = asyncio.create_task(self._test_dns_with_callback(ip, sem))
                     active_tasks.append(task)
 
-                # Wait loop for shuffled ips
-                while len(active_tasks) >= MAX_PENDING_TASKS or (shuffled_index >= len(self.remaining_ips) and active_tasks):
+                # Process completed tasks
+                if len(active_tasks) >= chunk_size or shuffled_index >= len(
+                    self.remaining_ips
+                ):
                     await self.pause_event.wait()
 
                     if self._shutdown_event and self._shutdown_event.is_set():
                         break
-                    
-                    if not active_tasks:
-                        break
 
-                    done, pending = await asyncio.wait(
+                    done, active_tasks = await asyncio.wait(
                         active_tasks, return_when=asyncio.FIRST_COMPLETED
                     )
 
@@ -2256,16 +2223,15 @@ class DNSScannerTUI(App):
                             result = await task
                             await self._process_result(result)
                         except asyncio.CancelledError:
-                            pass 
+                            pass  # Task was cancelled during shuffle transition
                         except Exception as e:
-                            logger.error(f"Error processing shuffled IP result: {e}")
+                            logger.error(
+                                f"Error processing shuffled IP result: {e}",
+                                exc_info=True,
+                            )
 
-                    active_tasks = list(pending)
+                    active_tasks = list(active_tasks)
                     await asyncio.sleep(0)
-                    
-                    # If we have drained enough, break inner loop to fetch more
-                    if len(active_tasks) < MAX_PENDING_TASKS and shuffled_index < len(self.remaining_ips):
-                        break
 
         # Clear shuffled IPs from memory after processing for better memory management
         if self.remaining_ips:
@@ -3290,34 +3256,49 @@ class DNSScannerTUI(App):
             self.notify("Can only shuffle when paused!", severity="warning")
             return
 
-        if not self.remaining_ips:
-            self._log("[yellow]Streaming and filtering untested IPs for shuffle (memory-efficient)...[/yellow]")
-            self.notify("Loading IPs for shuffle...", severity="information", timeout=3)
-
-            self.remaining_ips = []  # Build incrementally to avoid huge lists
-            async for item in self._stream_ips_from_file():
-                if isinstance(item, tuple):
-                    chunk, _ = item
-                else:
-                    chunk = item
-                # Filter chunk-by-chunk to save memory
-                untested_chunk = [ip for ip in chunk if ip not in self.tested_ips]
-                self.remaining_ips.extend(untested_chunk)
-                gc.collect()  # GC after each chunk to free memory
-
-        untested_count = len(self.remaining_ips)
-        if untested_count == 0:
-            self.notify("All IPs have been tested!", severity="information")
+        # Prevent multiple shuffles at the same time (fixes hang when pressing shuffle too many times)
+        if self.shuffle_lock.locked():
+            self.notify("Shuffle already in progress—please wait!", severity="warning")
             return
-        if untested_count > 1_000_000:  # Warn for very large shuffles
-            self.notify(f"Warning: Shuffling {untested_count} IPs may use a lot of memory!", severity="warning")
 
-        rng = secrets.SystemRandom()
-        rng.shuffle(self.remaining_ips)
-        gc.collect()
+        async with self.shuffle_lock:
+            if not self.remaining_ips:
+                self._log("[yellow]Streaming and filtering untested IPs for shuffle (memory-efficient)...[/yellow]")
+                self.notify("Loading IPs for shuffle...", severity="information", timeout=3)
 
-        self._log(f"[cyan]🔀 Shuffled {untested_count} untested IPs[/cyan]")
-        self.notify(f"Shuffled {untested_count} untested IPs", severity="information")
+                self.remaining_ips = []  # Build incrementally to avoid huge lists
+                chunk_count = 0  # Track chunks for progress
+                async for item in self._stream_ips_from_file():
+                    if isinstance(item, tuple):
+                        chunk, _ = item
+                    else:
+                        chunk = item
+                    # Filter chunk-by-chunk to save memory
+                    untested_chunk = [ip for ip in chunk if ip not in self.tested_ips]
+                    self.remaining_ips.extend(untested_chunk)
+                    gc.collect()  # GC after each chunk to free memory
+
+                    # Show progress every 100 chunks (updates UI, prevents freeze feel)
+                    chunk_count += 1
+                    if chunk_count % 100 == 0:
+                        current_count = len(self.remaining_ips)
+                        self._log(f"[dim]🔀 Loaded {current_count} untested IPs so far...[/dim]")
+                        await asyncio.sleep(0.01)  # Small yield to keep UI responsive
+
+            untested_count = len(self.remaining_ips)
+            if untested_count == 0:
+                self.notify("All IPs have been tested!", severity="information")
+                return
+            if untested_count > 1_000_000:  # Warn for very large shuffles
+                self.notify(f"Warning: Shuffling {untested_count} IPs may use a lot of memory!", severity="warning")
+
+            rng = secrets.SystemRandom()
+            # Run shuffle in a thread to prevent UI freeze (fixes hang during shuffle)
+            await asyncio.to_thread(rng.shuffle, self.remaining_ips)
+            gc.collect()
+
+            self._log(f"[cyan]🔀 Shuffled {untested_count} untested IPs[/cyan]")
+            self.notify(f"Shuffled {untested_count} untested IPs", severity="information")
 
     def _play_bell_sound(self) -> None:
         """Play a single coin/sparkle sound with error handling for systems without sound support."""
@@ -3489,10 +3470,7 @@ class DNSScannerTUI(App):
             self.remaining_ips = state['remaining_ips']  # List
             self.resolved_ips = state['resolved_ips']
             self.total_response_time = state['total_response_time']
-            
-            # Force rebuild table to show data immediately
-            self.table_needs_rebuild = True
-            self._rebuild_table() 
+            self._rebuild_table()  # Refresh UI
             self.notify("🐱 State loaded! Resume scanning.", severity="information")
         except FileNotFoundError:
             pass  # No notify on startup
@@ -3577,6 +3555,24 @@ class DNSScannerTUI(App):
             self.notify(f"Failed to save results: {e}", severity="error")
             logger.error(f"Failed to save results to {json_file}: {e}")
 
+    def action_quit(self) -> None:
+        """Gracefully quit and restore the terminal state."""
+        self._save_state()
+    
+        # 1. Signal the scanner to stop immediately
+        if hasattr(self, "_shutdown_event") and self._shutdown_event is not None:
+            self._shutdown_event.set()
+    
+        # 2. Kill background processes
+        if hasattr(self, "slipstream_processes"):
+            for process in self.slipstream_processes:
+                try:
+                    process.kill()
+                except Exception:
+                    pass
+            
+        # 3. Use Textual's exit to restore terminal properly
+        self.exit()
     
 def main():
     """Main entry point."""
