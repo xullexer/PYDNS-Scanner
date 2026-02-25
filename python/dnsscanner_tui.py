@@ -925,6 +925,7 @@ class DNSScannerTUI(App):
         color: #58a6ff;
     }
     
+    /* ==================== FIXED SELECT (readable dropdown) ==================== */
     Select:light {
         width: 1fr;
         background: #ffffff;
@@ -942,15 +943,17 @@ class DNSScannerTUI(App):
     }
     
     SelectCurrent:light {
-        background: #ffffff;
-        color: #24292f;
+        background: #f6f8fa;
+        color: #0969da;
         padding: 0 1;
+        text-style: bold;
     }
     
     SelectCurrent:dark {
-        background: #21262d;
-        color: #c9d1d9;
+        background: #30363d;
+        color: #58a6ff;
         padding: 0 1;
+        text-style: bold;
     }
     
     Select:light > SelectOverlay {
@@ -994,11 +997,13 @@ class DNSScannerTUI(App):
     Select:light > SelectOverlay > OptionList > .option-list--option-highlighted {
         background: #d0d7de;
         color: #0969da;
+        text-style: bold;
     }
     
     Select:dark > SelectOverlay > OptionList > .option-list--option-highlighted {
         background: #30363d;
         color: #58a6ff;
+        text-style: bold;
     }
     
     Select:light > SelectOverlay > OptionList > .option-list--option-hover {
@@ -1007,6 +1012,56 @@ class DNSScannerTUI(App):
     
     Select:dark > SelectOverlay > OptionList > .option-list--option-hover {
         background: #21262d;
+    }
+
+    /* ==================== FIXED CHECKBOXES (clear checked state) ==================== */
+    Checkbox {
+        background: transparent;
+        margin-right: 2;
+    }
+    
+    Checkbox:light {
+        color: #24292f;
+    }
+    
+    Checkbox:dark {
+        color: #c9d1d9;
+    }
+    
+    Checkbox > .toggle--button {
+        border: solid #d0d7de;
+        background: #ffffff;
+        width: 3;
+        height: 1;
+        content-align: center middle;
+    }
+    
+    Checkbox:dark > .toggle--button {
+        border: solid #30363d;
+        background: #21262d;
+    }
+    
+    Checkbox.-checked > .toggle--button {
+        background: #1f883d;
+        color: #ffffff;
+        border: solid #1f883d;
+    }
+    
+    Checkbox:dark.-checked > .toggle--button {
+        background: #238636;
+        color: #ffffff;
+        border: solid #238636;
+    }
+    
+    Checkbox:light:focus > .toggle--button,
+    Checkbox:dark:focus > .toggle--button {
+        border: solid #58a6ff;
+    }
+    
+    .checkbox-row {
+        align: center middle;
+        height: auto;
+        padding: 1 0;
     }
     
     #progress-container:light {
@@ -1252,32 +1307,6 @@ class DNSScannerTUI(App):
         background: #161b22;
         color: #c9d1d9;
     }
-    
-    Checkbox:light {
-        background: transparent;
-        color: #24292f;
-        margin-right: 2;
-    }
-    
-    Checkbox:dark {
-        background: transparent;
-        color: #c9d1d9;
-        margin-right: 2;
-    }
-    
-    Checkbox:light:focus > .toggle--button {
-        background: #0969da;
-    }
-    
-    Checkbox:dark:focus > .toggle--button {
-        background: #58a6ff;
-    }
-    
-    .checkbox-row {
-        align: center middle;
-        height: auto;
-        padding: 1 0;
-    }
     """
 
     BINDINGS = [
@@ -1308,7 +1337,7 @@ class DNSScannerTUI(App):
         self.proxy_password = ""  # Proxy password
         self.ignore_censorship = False  
         self.ignore_errors = False 
-        
+        self.auto_save_timer: Optional[asyncio.TimerHandle] = None
         # Config file for caching settings
         self.config_dir = Path.home() / ".pydns-scanner"
         self.config_file = self.config_dir / "config.json"
@@ -1586,8 +1615,7 @@ class DNSScannerTUI(App):
 
         # NEW: rebuild table only every 5 seconds → no lag when clicking buttons
         self.set_interval(5.0, self._periodic_table_rebuild)
-        self.set_interval(300.0, self._save_state)  # Auto-save every 5 minutes
-
+        self.auto_save_timer = self.set_interval(300.0, self._save_state)  # Auto-save every 5 minutes
         
     def _periodic_table_rebuild(self) -> None:
         """Rebuild table periodically so we don't freeze the UI."""
@@ -2293,53 +2321,53 @@ class DNSScannerTUI(App):
         range_widget = self.query_one("#current-range", CurrentRange)
         if self.remaining_ips:
             range_widget.range_text = f"🔀 Shuffled mode - preparing chunks... ({len(self.remaining_ips):,} IPs)"
-            await asyncio.sleep(0.01)  # Minimal delay for UI update (reduced from 0.1 for speed)
-            chunk_size = 1024  # Increased chunk size for faster processing
+            await asyncio.sleep(0.01)
+            chunk_size = 1024
             for i in range(0, len(self.remaining_ips), chunk_size):
                 chunk = self.remaining_ips[i:i + chunk_size]
                 if chunk:
-                    # Calculate min-max IP for display (does not sort the chunk, preserves shuffle)
                     min_ip = min(chunk, key=lambda x: int(ipaddress.IPv4Address(x)))
                     max_ip = max(chunk, key=lambda x: int(ipaddress.IPv4Address(x)))
                     range_widget.range_text = f"🔀 Shuffled chunk: {min_ip} - {max_ip} ({len(chunk)} IPs)"
                     for ip in chunk:
                         await self.ip_queue.put(ip)
-                    # Wait for chunk to process (similar to normal mode)
                     while self.ip_queue.qsize() > 0:
                         if self.skip_current_range:
                             try:
                                 while self.ip_queue.qsize() > 0:
-                                    self.ip_queue.get_nowait()  # Drain the queue to skip remaining IPs
+                                    self.ip_queue.get_nowait()
                                 self._log(f"[yellow]⏭ Drained and skipped current shuffled chunk: {min_ip} - {max_ip}[/yellow]")
                             except asyncio.queues.QueueEmpty:
                                 pass
                             self.skip_current_range = False
-                            break  # Move to next chunk
-                        await asyncio.sleep(0.05)  # Reduced sleep for faster looping (keeps UI responsive without lag)
+                            break
+                        await asyncio.sleep(0.05)
                         if self._shutdown_event.is_set():
                             break
-                    gc.collect()  # Force GC after each chunk to keep memory low
+                    gc.collect()
             self.remaining_ips.clear()
         else:
             async for chunk, current_range in self._stream_ips_from_file():
                 range_widget.range_text = current_range
                 for ip in chunk:
                     await self.ip_queue.put(ip)
-                # Wait for this range to be fully processed
                 while self.ip_queue.qsize() > 0:
                     if self.skip_current_range:
                         try:
                             while self.ip_queue.qsize() > 0:
-                                self.ip_queue.get_nowait()  # Drain the queue to skip remaining IPs
+                                self.ip_queue.get_nowait()
                             self._log(f"[yellow]⏭ Drained and skipped current range: {current_range}[/yellow]")
                         except asyncio.queues.QueueEmpty:
                             pass
                         self.skip_current_range = False
-                        break  # Move to next range
-                    await asyncio.sleep(0.05)  # Reduced sleep for faster processing
+                        break
+                    await asyncio.sleep(0.05)
                     if self._shutdown_event.is_set():
                         break
-        await self.ip_queue.put(None)
+
+        # FIXED: Send one None to EVERY worker so they all exit cleanly
+        for _ in range(self.concurrency):
+            await self.ip_queue.put(None)
 
 
     async def _dns_worker(self):
@@ -3088,10 +3116,14 @@ class DNSScannerTUI(App):
             elapsed = time.time() - self.start_time
             stats.elapsed = elapsed
             stats.speed = self.current_scanned / elapsed if elapsed > 0 else 0
-            stats.total = max(self.current_scanned, stats.total)  # Ensure total >= scanned (for accurate 100%)
-    
+            # On completion, adjust total to actual scanned (ignores invalid lines/comments)
+            stats.total = self.current_scanned
+            stats.average_time = (
+                self.total_response_time / stats.found if stats.found > 0 else 0.0
+            )
+
             progress_bar = self.query_one("#progress-bar", CustomProgressBar)
-            progress_bar.update_progress(self.current_scanned, stats.total)  # Force correct progress (100% if done)
+            progress_bar.update_progress(self.current_scanned, stats.total)  # Force 100%
         except Exception as e:
             logger.debug(f"Could not update final statistics: {e}")
     
@@ -3108,6 +3140,12 @@ class DNSScannerTUI(App):
             gc.collect()
     
         self._auto_save_results()
+    
+        # Stop auto-save interval and clean up state file (no need to resume finished scan)
+        self.clear_interval(self.auto_save_timer)
+        if Path('scan_state.json').exists():
+            os.remove('scan_state.json')
+            self._log("[dim]Cleaned up finished scan state file.[/dim]")
     
         self.notify("Scan complete! Results auto-saved.", severity="information")
 
