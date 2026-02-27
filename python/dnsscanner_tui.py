@@ -3634,7 +3634,14 @@ class DNSScannerTUI(App):
 
     async def _test_resolve(self, ip: str, resolver: "aiodns.DNSResolver | None" = None) -> None:
         """Resolve the scan domain via this DNS server and record the resulting IP."""
-        resolve_domain = self.domain.strip() or "google.com"
+        # For non-A record scans (NS, AAAA, etc.) the user's domain may not have
+        # accessible A records on the servers being tested, so fall back to a
+        # universally-resolvable domain.  For A-record scans we use the user's own
+        # domain so the column reflects that specific lookup.
+        if self.dns_type == "A":
+            resolve_domain = self.domain.strip() or "google.com"
+        else:
+            resolve_domain = "google.com"
         try:
             resolver = resolver or aiodns.DNSResolver(nameservers=[ip], timeout=3.0, tries=1)
             answer = await resolver.query(resolve_domain, "A")

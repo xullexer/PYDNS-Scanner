@@ -6,6 +6,13 @@
 
 ### 🇬🇧 English
 
+#### 🚀 v1.4.3
+
+**🐛 Bug Fix — NS Record Scanning**
+- 🔎 **NS / non-A record scans now return correct "Resolved IP" values** — Previously, when scanning with type `NS` (or any non-A type), the "Resolved IP" column queried the user's own domain for an A record through each candidate server. Many servers that correctly respond to NS or AAAA queries have no cached A record for that domain, so the column showed `-` for all results. Now, the "Resolved IP" column always performs an A-record lookup for `google.com` when the selected DNS type is not `A`, guaranteeing a meaningful result regardless of query type.
+
+---
+
 #### 🚀 v1.4.2
 
 **📦 Android / ARM Release Binaries**
@@ -83,6 +90,13 @@ All three modes use the same scanning logic. The differences are the maximum num
 
 ### 🇮🇷 فارسی
 
+#### 🚀 نسخه ۱.۴.۳
+
+**🐛 رفع باگ — اسکن رکورد NS**
+- 🔎 **اسکن‌های NS و انواع غیر-A اکنون مقادیر صحیح در ستون «Resolved IP» نمایش می‌دهند** — پیش از این، هنگام اسکن با نوع `NS` (یا هر نوع غیر-A)، ستون «Resolved IP» دامنه کاربر را از طریق هر سرور کاندیدا برای رکورد A جستجو می‌کرد. بسیاری از سرورهایی که به درستی به پرس‌وجوهای NS یا AAAA پاسخ می‌دهند، رکورد A آن دامنه را در کش ندارند و ستون برای همه نتایج `-` نشان می‌داد. اکنون، ستون «Resolved IP» همیشه هنگامی که نوع DNS انتخابی `A` نیست، یک جستجوی A-record برای `google.com` انجام می‌دهد و نتیجه‌ای معنادار را صرف‌نظر از نوع پرس‌وجو تضمین می‌کند.
+
+---
+
 #### 🚀 نسخه ۱.۴.۲
 
 **📦 باینری‌های انتشار Android / ARM**
@@ -159,6 +173,13 @@ All three modes use the same scanning logic. The differences are the maximum num
 ---
 
 ### 🇨🇳 中文
+
+#### 🚀 v1.4.3
+
+**🐛 Bug 修复 — NS 记录扫描**
+- 🔎 **NS / 非 A 类型扫描现在可正确显示"Resolved IP"列** — 此前，当使用 `NS`（或任何非 A 类型）进行扫描时，"Resolved IP"列会通过每个候选服务器查询用户域名的 A 记录。许多能够正确响应 NS 或 AAAA 查询的服务器并未缓存该域名的 A 记录，导致列对所有结果显示 `-`。现在，当所选 DNS 类型不是 `A` 时，"Resolved IP"列始终对 `google.com` 执行 A 记录查询，确保无论查询类型如何都能显示有意义的结果。
+
+---
 
 #### 🚀 v1.4.2
 
