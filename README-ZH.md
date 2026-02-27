@@ -120,14 +120,16 @@
 ### 依赖项
 
 ```bash
-# 核心依赖
+# 核心依赖（始终安装 — 在所有平台包括 Android/Termux 上均可工作）
 textual>=0.47.0       # TUI 框架
 aiodns>=3.1.0         # 异步 DNS 解析器
 httpx[socks]>=0.25.0  # 支持 SOCKS5 的 HTTP 客户端（用于代理测试）
-orjson>=3.9.0         # 快速 JSON 序列化
 loguru>=0.7.0         # 高级日志记录
-pyperclip>=1.8.0      # 剪贴板支持
-google-re2>=1.0       # 快速 RE2 正则引擎（替代标准库 re）
+
+# 可选 "full" 额外包 (pip install pydns-scanner[full]) — 仅桌面端
+google-re2>=1.0       # 快速 RE2 正则引擎（回退至标准库 re）
+orjson>=3.9.0         # 快速 JSON 序列化（回退至标准库 json）
+pyperclip>=1.8.0      # 剪贴板支持（缺少时自动禁用）
 ```
 
 ### 可选
@@ -170,10 +172,26 @@ google-re2>=1.0       # 快速 RE2 正则引擎（替代标准库 re）
 pip install pydns-scanner
 ```
 
+#### 桌面端 — 完整额外包（更快正则、剪贴板、快速 JSON）
+```bash
+pip install pydns-scanner[full]
+```
+
 #### 使用 uv（更快）
 ```bash
-uv pip install pydns-scanner
+uv pip install pydns-scanner        # 核心
+uv pip install pydns-scanner[full]   # 桌面端额外包
 ```
+
+#### Android / Termux
+```bash
+pkg update && pkg install python
+pip install pydns-scanner            # 仅核心 — 在 Termux 上始终可用
+pydns-scanner
+```
+
+> **注意：** 在 Android/Termux 上，可选的 C 扩展包（`google-re2`、`orjson`、`pyperclip`）会自动跳过
+> — 扫描器无需任何手动干预即可回退至标准库等价物。
 
 #### 使用镜像源（适用于 PyPI 访问受限的用户）
 ```bash

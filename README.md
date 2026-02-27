@@ -120,14 +120,16 @@ All three modes use identical scan logic. They differ only in how many IPs are r
 ### Dependencies
 
 ```bash
-# Core dependencies
+# Core dependencies (always installed — works on every platform including Android/Termux)
 textual>=0.47.0       # TUI framework
 aiodns>=3.1.0         # Async DNS resolver
 httpx[socks]>=0.25.0  # HTTP client with SOCKS5 support for proxy testing
-orjson>=3.9.0         # Fast JSON serialization
 loguru>=0.7.0         # Advanced logging
-pyperclip>=1.8.0      # Clipboard support
-google-re2>=1.0       # Fast RE2 regex engine (replaces stdlib re)
+
+# Optional "full" extras (pip install pydns-scanner[full]) — desktop only
+google-re2>=1.0       # Fast RE2 regex engine (falls back to stdlib re)
+orjson>=3.9.0         # Fast JSON serialization (falls back to stdlib json)
+pyperclip>=1.8.0      # Clipboard support (silently disabled when absent)
 ```
 
 ### Optional
@@ -179,10 +181,26 @@ The easiest way to install PYDNS Scanner:
 pip install pydns-scanner
 ```
 
+#### Desktop — full extras (faster regex, clipboard, fast JSON)
+```bash
+pip install pydns-scanner[full]
+```
+
 #### Using uv (Faster)
 ```bash
-uv pip install pydns-scanner
+uv pip install pydns-scanner        # core
+uv pip install pydns-scanner[full]   # desktop extras
 ```
+
+#### Android / Termux
+```bash
+pkg update && pkg install python
+pip install pydns-scanner            # core only — always works on Termux
+pydns-scanner
+```
+
+> **Note:** On Android/Termux the optional C-extension packages (`google-re2`, `orjson`, `pyperclip`) are
+> automatically skipped — the scanner falls back to stdlib equivalents with zero manual intervention.
 
 #### Using Mirror (For Users with Limited Access to PyPI)
 ```bash

@@ -6,6 +6,19 @@
 
 ### 🇬🇧 English
 
+#### 🚀 v1.4.2
+
+**📦 Android / ARM Release Binaries**
+- ✅ **`pydns-scanner-linux-aarch64`** — Pre-built ARM64 binary for Linux ARM64 servers, Raspberry Pi, and Android via proot-distro
+- ✅ **`pydns-scanner-linux-arm`** — Pre-built ARMv7 binary for 32-bit ARM devices
+- ✅ GitHub Actions now builds ARM executables via QEMU emulation alongside Windows, Linux x86_64, and macOS
+
+**📦 PyPI: Seamless Install on Android / Termux**
+- ✅ **Optional C-extension deps** — `google-re2`, `orjson`, and `pyperclip` moved from hard requirements to optional extras (`pip install pydns-scanner[full]`); core `pip install pydns-scanner` now installs cleanly on Termux without build failures
+- ✅ Code already falls back to stdlib equivalents (`re`, `json`, no-op clipboard) when these packages are absent
+
+---
+
 #### 🚀 v1.4.1
 
 **🤖 Android / Termux Compatibility**
@@ -70,6 +83,19 @@ All three modes use the same scanning logic. The differences are the maximum num
 
 ### 🇮🇷 فارسی
 
+#### 🚀 نسخه ۱.۴.۲
+
+**📦 باینری‌های انتشار Android / ARM**
+- ✅ **`pydns-scanner-linux-aarch64`** — باینری آماده ARM64 برای سرورهای لینوکس ARM64، رزبری پای و اندروید از طریق proot-distro
+- ✅ **`pydns-scanner-linux-arm`** — باینری آماده ARMv7 برای دستگاه‌های ARM 32-بیتی
+- ✅ GitHub Actions اکنون فایل‌های اجرایی ARM را از طریق شبیه‌سازی QEMU در کنار Windows، Linux x86_64 و macOS می‌سازد
+
+**📦 PyPI: نصب بی‌دردسر روی Android / Termux**
+- ✅ **وابستگی‌های C-extension اختیاری** — `google-re2`، `orjson` و `pyperclip` از وابستگی اجباری به اکسترای اختیاری (`pip install pydns-scanner[full]`) منتقل شدند؛ `pip install pydns-scanner` پایه اکنون بدون خطای ساخت روی Termux نصب می‌شود
+- ✅ کد به‌طور خودکار به معادل‌های استاندارد (`re`، `json`، کلیپ‌بورد بی‌عمل) جایگزین می‌شود
+
+---
+
 #### 🚀 نسخه ۱.۴.۱
 
 **🤖 سازگاری با Android / Termux**
@@ -133,6 +159,19 @@ All three modes use the same scanning logic. The differences are the maximum num
 ---
 
 ### 🇨🇳 中文
+
+#### 🚀 v1.4.2
+
+**📦 Android / ARM 发布二进制文件**
+- ✅ **`pydns-scanner-linux-aarch64`** — 预构建的 ARM64 二进制文件，适用于 Linux ARM64 服务器、树莓派和通过 proot-distro 的 Android
+- ✅ **`pydns-scanner-linux-arm`** — 预构建的 ARMv7 二进制文件，适用于 32 位 ARM 设备
+- ✅ GitHub Actions 现通过 QEMU 仿真构建 ARM 可执行文件，与 Windows、Linux x86_64 和 macOS 并行
+
+**📦 PyPI：Android / Termux 无缝安装**
+- ✅ **可选 C 扩展依赖** — `google-re2`、`orjson` 和 `pyperclip` 从必需依赖移至可选额外包（`pip install pydns-scanner[full]`）；核心 `pip install pydns-scanner` 现可在 Termux 上干净安装，无构建失败
+- ✅ 代码已自动回退至标准库等价物（`re`、`json`、空操作剪贴板）
+
+---
 
 #### 🚀 v1.4.1
 

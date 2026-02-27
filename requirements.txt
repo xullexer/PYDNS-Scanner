@@ -1,5 +1,13 @@
 # DNS Scanner Python TUI - Requirements
 # Install with: pip install -r requirements.txt
+#
+# Android / Termux users:
+#   pip install -r requirements.txt          (core only — always works)
+# Desktop users (full experience):
+#   pip install -r requirements.txt && pip install -r requirements-full.txt
+#   OR: pip install pydns-scanner[full]
+
+# ── Core (works on every platform including Android / Termux) ──
 
 # TUI Framework
 textual>=0.47.0
@@ -11,17 +19,8 @@ pycares>=4.3.0
 # HTTP Client for Slipstream Proxy Testing (with SOCKS5 support)
 httpx[socks]>=0.25.0
 
-# Fast JSON Serialization
-orjson>=3.9.0
-
 # Advanced Logging
 loguru>=0.7.0
-
-# Clipboard Support
-pyperclip>=1.8.0
-
-# Fast Regex (Google RE2)
-google-re2>=1.0
 
 # Additional Dependencies (installed automatically with above)
 # rich>=13.0.0  (installed with textual)

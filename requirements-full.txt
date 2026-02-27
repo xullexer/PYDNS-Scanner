@@ -1,0 +1,12 @@
+# Optional "full" dependencies — desktop / x86_64 / non-Android only
+# These improve performance but are NOT required.
+# On Android / Termux the scanner falls back to stdlib equivalents automatically.
+
+# Fast Regex (Google RE2) — falls back to stdlib re
+google-re2>=1.0
+
+# Fast JSON Serialization — falls back to stdlib json
+orjson>=3.9.0
+
+# Clipboard Support — clipboard copy silently disabled when absent
+pyperclip>=1.8.0

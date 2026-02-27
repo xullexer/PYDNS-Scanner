@@ -13,6 +13,7 @@ permissions:
   contents: read
 
 jobs:
+  # ── Desktop builds (x86_64 runners) ────────────────────────────
   build-windows:
     runs-on: windows-latest
     permissions:
@@ -30,6 +31,7 @@ jobs:
         run: |
           pip install pyinstaller
           pip install -r requirements.txt
+          pip install -r requirements-full.txt || true
       
       - name: Build Windows executable
         run: pyinstaller --clean pydns-scanner.spec
@@ -58,6 +60,7 @@ jobs:
         run: |
           pip install pyinstaller
           pip install -r requirements.txt
+          pip install -r requirements-full.txt || true
       
       - name: Build Linux executable
         run: pyinstaller --clean pydns-scanner.spec
@@ -86,6 +89,7 @@ jobs:
         run: |
           pip install pyinstaller
           pip install -r requirements.txt
+          pip install -r requirements-full.txt || true
       
       - name: Build macOS executable
         run: pyinstaller --clean pydns-scanner.spec
@@ -97,8 +101,49 @@ jobs:
           path: dist/pydns-scanner
           retention-days: 5
 
+  # ── Linux ARM builds (QEMU emulation) ──────────────────────────
+  build-linux-arm:
+    name: Build Linux ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - arch: aarch64
+            distro: ubuntu22.04
+            artifact-name: pydns-scanner-linux-aarch64
+          - arch: armv7
+            distro: ubuntu22.04
+            artifact-name: pydns-scanner-linux-arm
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: uraimo/run-on-arch-action@v2
+        name: Build on ${{ matrix.arch }}
+        with:
+          arch: ${{ matrix.arch }}
+          distro: ${{ matrix.distro }}
+          githubToken: ${{ github.token }}
+          install: |
+            apt-get update -q -y
+            apt-get install -q -y python3 python3-pip python3-venv python3-dev build-essential
+          run: |
+            python3 -m pip install --break-system-packages pyinstaller
+            python3 -m pip install --break-system-packages -r requirements.txt
+            python3 -m PyInstaller --clean pydns-scanner.spec
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: dist/pydns-scanner
+          retention-days: 5
+
+  # ── Release (optional, manual only) ─────────────────────────────
   release:
-    needs: [build-windows, build-linux, build-macos]
+    needs: [build-windows, build-linux, build-macos, build-linux-arm]
     runs-on: ubuntu-latest
     if: github.event.inputs.create_release == 'true'
     permissions:
@@ -125,13 +170,29 @@ jobs:
           name: pydns-scanner-macos
           path: ./artifacts/macos
       
+      - name: Download Linux ARM64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pydns-scanner-linux-aarch64
+          path: ./artifacts/linux-aarch64
+      
+      - name: Download Linux ARM artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: pydns-scanner-linux-arm
+          path: ./artifacts/linux-arm
+      
       - name: Rename executables
         run: |
           mv ./artifacts/windows/pydns-scanner.exe ./pydns-scanner-windows.exe
           mv ./artifacts/linux/pydns-scanner ./pydns-scanner-linux
           mv ./artifacts/macos/pydns-scanner ./pydns-scanner-macos
+          mv ./artifacts/linux-aarch64/pydns-scanner ./pydns-scanner-linux-aarch64
+          mv ./artifacts/linux-arm/pydns-scanner ./pydns-scanner-linux-arm
           chmod +x ./pydns-scanner-linux
           chmod +x ./pydns-scanner-macos
+          chmod +x ./pydns-scanner-linux-aarch64
+          chmod +x ./pydns-scanner-linux-arm
       
       - name: Get version from tag or branch
         id: get_version
@@ -151,6 +212,8 @@ jobs:
             pydns-scanner-windows.exe
             pydns-scanner-linux
             pydns-scanner-macos
+            pydns-scanner-linux-aarch64
+            pydns-scanner-linux-arm
           body_path: RELEASE_NOTES.md
           draft: true
           prerelease: false

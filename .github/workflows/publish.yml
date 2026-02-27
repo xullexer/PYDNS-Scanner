@@ -7,6 +7,7 @@ on:
   workflow_dispatch:  # Allow manual trigger
 
 jobs:
+  # ── Desktop builds (x86_64 runners) ────────────────────────────
   build-executables:
     name: Build ${{ matrix.os }} executable
     runs-on: ${{ matrix.os }}
@@ -37,6 +38,7 @@ jobs:
         run: |
           pip install pyinstaller
           pip install -r requirements.txt
+          pip install -r requirements-full.txt || true
       
       - name: Build executable
         run: pyinstaller --clean pydns-scanner.spec
@@ -48,8 +50,49 @@ jobs:
           path: ${{ matrix.build-path }}
           retention-days: 5
 
+  # ── Linux ARM builds (QEMU emulation) ──────────────────────────
+  build-linux-arm:
+    name: Build Linux ${{ matrix.arch }} executable
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        include:
+          - arch: aarch64
+            distro: ubuntu22.04
+            artifact-name: pydns-scanner-linux-aarch64
+          - arch: armv7
+            distro: ubuntu22.04
+            artifact-name: pydns-scanner-linux-arm
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: uraimo/run-on-arch-action@v2
+        name: Build on ${{ matrix.arch }}
+        with:
+          arch: ${{ matrix.arch }}
+          distro: ${{ matrix.distro }}
+          githubToken: ${{ github.token }}
+          install: |
+            apt-get update -q -y
+            apt-get install -q -y python3 python3-pip python3-venv python3-dev build-essential
+          run: |
+            python3 -m pip install --break-system-packages pyinstaller
+            python3 -m pip install --break-system-packages -r requirements.txt
+            python3 -m PyInstaller --clean pydns-scanner.spec
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: dist/pydns-scanner
+          retention-days: 5
+
+  # ── Publish to PyPI + create GitHub Release ─────────────────────
   publish:
-    needs: build-executables
+    needs: [build-executables, build-linux-arm]
     runs-on: ubuntu-latest
     permissions:
       id-token: write  # Required for trusted publishing
@@ -84,11 +127,18 @@ jobs:
         run: |
           mkdir -p release-files
           cp dist/*.whl dist/*.tar.gz release-files/ || true
+          # Desktop builds
           cp executables/pydns-scanner-windows.exe/pydns-scanner.exe release-files/pydns-scanner-windows.exe || true
           cp executables/pydns-scanner-linux/pydns-scanner release-files/pydns-scanner-linux || true
           cp executables/pydns-scanner-macos/pydns-scanner release-files/pydns-scanner-macos || true
+          # ARM builds
+          cp executables/pydns-scanner-linux-aarch64/pydns-scanner release-files/pydns-scanner-linux-aarch64 || true
+          cp executables/pydns-scanner-linux-arm/pydns-scanner release-files/pydns-scanner-linux-arm || true
+          # Make Linux/macOS executables runnable
           chmod +x release-files/pydns-scanner-linux || true
           chmod +x release-files/pydns-scanner-macos || true
+          chmod +x release-files/pydns-scanner-linux-aarch64 || true
+          chmod +x release-files/pydns-scanner-linux-arm || true
           ls -lah release-files/
       
       - name: Create GitHub Release
