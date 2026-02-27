@@ -50,7 +50,7 @@ jobs:
           path: ${{ matrix.build-path }}
           retention-days: 5
 
-  # ── Linux ARM builds (QEMU emulation) ──────────────────────────
+  # ── Linux ARM builds (QEMU + docker run — avoids run-on-arch-action bugs) ──
   build-linux-arm:
     name: Build Linux ${{ matrix.arch }} executable
     runs-on: ubuntu-latest
@@ -61,44 +61,42 @@ jobs:
       matrix:
         include:
           - arch: aarch64
-            distro: bookworm
+            platform: linux/arm64
             artifact-name: pydns-scanner-linux-aarch64
           - arch: armv7
-            distro: bookworm
+            platform: linux/arm/v7
             artifact-name: pydns-scanner-linux-arm
-    
+
     steps:
       - uses: actions/checkout@v4
-      
-      - uses: uraimo/run-on-arch-action@v2
-        name: Build on ${{ matrix.arch }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
         with:
-          arch: ${{ matrix.arch }}
-          distro: ${{ matrix.distro }}
-          githubToken: ${{ github.token }}
-          env: |
-            PYCARES_USE_SYSTEM_LIB: "1"
-          install: |
-            apt-get update -q -y
-            apt-get install -q -y \
-              python3 python3-pip python3-venv python3-dev \
-              build-essential libffi-dev libssl-dev zlib1g-dev \
-              libc-ares-dev pkg-config patchelf
-          run: |
-            set -ex
-            python3 --version
-            export PYCARES_USE_SYSTEM_LIB=1
-            python3 -m venv /opt/venv
-            . /opt/venv/bin/activate
-            pip install --upgrade pip setuptools wheel
-            pip install --prefer-binary pyinstaller
-            # pycares: try pre-built wheel first; fall back to source build with system lib
-            pip install --prefer-binary "pycares>=4.3.0" || \
-              PYCARES_USE_SYSTEM_LIB=1 pip install --no-build-isolation "pycares>=4.3.0"
-            pip install --prefer-binary -r requirements.txt
-            python -m PyInstaller --clean pydns-scanner.spec
-            ls -lah dist/
-      
+          platforms: linux/arm64,linux/arm/v7
+
+      - name: Build on ${{ matrix.arch }}
+        run: |
+          docker run --rm \
+            --platform ${{ matrix.platform }} \
+            -v "${{ github.workspace }}:/src" \
+            -w /src \
+            -e PYCARES_USE_SYSTEM_LIB=1 \
+            python:3.11-slim-bookworm \
+            bash -exc "
+              apt-get update -qq
+              apt-get install -y -qq \
+                build-essential libffi-dev libssl-dev \
+                libc-ares-dev zlib1g-dev pkg-config patchelf binutils
+              pip install --upgrade pip setuptools wheel
+              pip install --prefer-binary pyinstaller
+              pip install --prefer-binary 'pycares>=4.3.0' || \
+                PYCARES_USE_SYSTEM_LIB=1 pip install --no-build-isolation 'pycares>=4.3.0'
+              pip install --prefer-binary -r requirements.txt
+              python -m PyInstaller --clean pydns-scanner.spec
+              ls -lah dist/
+            "
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
