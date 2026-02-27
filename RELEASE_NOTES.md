@@ -6,6 +6,17 @@
 
 ### 🇬🇧 English
 
+#### 🚀 v1.4.1
+
+**🤖 Android / Termux Compatibility**
+- ✅ **Platform-aware imports** — `google-re2` and `pyperclip` are automatically skipped on Android/Termux; falls back to stdlib `re` and a no-op clipboard wrapper respectively
+- ✅ **Zero crash on Termux** — App now launches cleanly on Termux without any manual package removal
+
+**🐛 Bug Fix**
+- 🔎 **Resolved IP column** — Previously always resolved `google.com` regardless of the configured scan domain; now correctly resolves the domain entered in the scan configuration
+
+---
+
 #### 🚀 v1.4.0
 
 **🎨 Redesigned Start Menu**
@@ -59,6 +70,17 @@ All three modes use the same scanning logic. The differences are the maximum num
 
 ### 🇮🇷 فارسی
 
+#### 🚀 نسخه ۱.۴.۱
+
+**🤖 سازگاری با Android / Termux**
+- ✅ **وارد کردن وابسته به پلتفرم** — `google-re2` و `pyperclip` روی Android/Termux به‌طور خودکار رد می‌شوند؛ به ترتیب به `re` استاندارد و یک wrapper بی‌عمل جایگزین می‌شوند
+- ✅ **بدون crash در Termux** — اپلیکیشن اکنون بدون نیاز به حذف دستی هیچ بسته‌ای در Termux اجرا می‌شود
+
+**🐛 رفع باگ**
+- 🔎 **ستون Resolved IP** — قبلاً بدون توجه به دامنه پیکربندی‌شده همیشه `google.com` را resolve می‌کرد؛ اکنون دامنه وارد‌شده در تنظیمات اسکن به‌درستی resolve می‌شود
+
+---
+
 #### 🚀 نسخه ۱.۴.۰
 
 **🎨 منوی شروع طراحی‌شده از نو**
@@ -111,6 +133,17 @@ All three modes use the same scanning logic. The differences are the maximum num
 ---
 
 ### 🇨🇳 中文
+
+#### 🚀 v1.4.1
+
+**🤖 Android / Termux 兼容性**
+- ✅ **平台感知导入** — 在 Android/Termux 上自动跳过 `google-re2` 和 `pyperclip`；分别回退至标准库 `re` 和空操作剪贴板包装器
+- ✅ **Termux 零崩溃** — 无需手动删除任何包，应用现可在 Termux 上正常启动
+
+**🐛 缺陷修复**
+- 🔎 **已解析 IP 列** — 此前无论配置的扫描域名是什么，始终解析 `google.com`；现已正确解析扫描配置中输入的域名
+
+---
 
 #### 🚀 v1.4.0
 

@@ -12,14 +12,13 @@ import mmap
 import os
 import platform
 import random
-import re2 as re
 import secrets
-import threading
 import socket
 import stat
 import struct
 import subprocess
 import sys
+import threading
 import time
 from collections import deque
 from datetime import datetime
@@ -28,10 +27,47 @@ from typing import Set, AsyncGenerator, Optional
 
 import aiodns
 import httpx
-import pyperclip
 from loguru import logger
 from rich.markup import escape as markup_escape
 from rich.text import Text
+
+# ---------------------------------------------------------------------------
+# Platform detection — Android/Termux cannot use compiled C extensions
+# such as google-re2.  All other platforms try to use the fast version first.
+# ---------------------------------------------------------------------------
+def _is_android() -> bool:
+    """Detect Android/Termux environment."""
+    return (
+        os.path.exists("/data/data/com.termux") or
+        os.path.exists("/data/data/com.termux.fdroid") or
+        "com.termux" in os.environ.get("PREFIX", "") or
+        "ANDROID_ROOT" in os.environ or
+        "ANDROID_DATA" in os.environ
+    )
+
+_ANDROID = _is_android()
+
+try:
+    if _ANDROID:
+        raise ImportError("Skipping google-re2 on Android/Termux")
+    import re2 as re  # type: ignore  # noqa: F401
+except ImportError:
+    import re  # type: ignore  # noqa: F401
+
+try:
+    if _ANDROID:
+        raise ImportError("Skipping pyperclip on Android/Termux")
+    import pyperclip as _pyperclip_mod
+    def _copy_to_clipboard(text: str) -> bool:
+        try:
+            _pyperclip_mod.copy(text)
+            return True
+        except Exception:
+            return False
+except ImportError:
+    def _copy_to_clipboard(text: str) -> bool:  # type: ignore
+        return False
+
 if sys.platform == "win32":
     # Required for aiodns/pycares to work on Windows
     # They don't support ProactorEventLoop (default on Py3.8+)
@@ -3597,15 +3633,16 @@ class DNSScannerTUI(App):
             self._log(f"[cyan]{ip}: IPv6 (AAAA) supported[/cyan]")
 
     async def _test_resolve(self, ip: str, resolver: "aiodns.DNSResolver | None" = None) -> None:
-        """Resolve google.com via this DNS server and record the resulting IP."""
+        """Resolve the scan domain via this DNS server and record the resulting IP."""
+        resolve_domain = self.domain.strip() or "google.com"
         try:
             resolver = resolver or aiodns.DNSResolver(nameservers=[ip], timeout=3.0, tries=1)
-            answer = await resolver.query("google.com", "A")
+            answer = await resolver.query(resolve_domain, "A")
             if answer:
                 ips = [r.host for r in answer]
                 resolved = ips[0] if len(ips) == 1 else ", ".join(ips[:2])
                 self.resolve_results[ip] = resolved
-                self._log(f"[cyan]{ip}: google.com → {resolved}[/cyan]")
+                self._log(f"[cyan]{ip}: {resolve_domain} → {resolved}[/cyan]")
             else:
                 self.resolve_results[ip] = "-"
         except Exception as e:
@@ -3843,7 +3880,7 @@ class DNSScannerTUI(App):
                 ip = re.sub(r"\[.*?\]", "", ip_raw).strip()
 
                 if ip:
-                    pyperclip.copy(ip)
+                    _copy_to_clipboard(ip)
                     self.notify(f"{ip} copied!", severity="information", timeout=2)
 
                     # Show extra test details in log if available
