@@ -20,6 +20,9 @@ loguru>=0.7.0
 # Clipboard Support
 pyperclip>=1.8.0
 
+# Fast Regex (Google RE2)
+google-re2>=1.0
+
 # Additional Dependencies (installed automatically with above)
 # rich>=13.0.0  (installed with textual)
 # typing-extensions>=4.0.0

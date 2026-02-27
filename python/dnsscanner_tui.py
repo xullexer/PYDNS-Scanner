@@ -4,14 +4,20 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import gc
 import ipaddress
 import json
 import mmap
 import os
 import platform
+import random
+import re2 as re
 import secrets
+import threading
+import socket
 import stat
+import struct
 import subprocess
 import sys
 import time
@@ -22,10 +28,15 @@ from typing import Set, AsyncGenerator, Optional
 
 import aiodns
 import httpx
-import orjson
 import pyperclip
 from loguru import logger
+from rich.markup import escape as markup_escape
 from rich.text import Text
+if sys.platform == "win32":
+    # Required for aiodns/pycares to work on Windows
+    # They don't support ProactorEventLoop (default on Py3.8+)
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
@@ -38,11 +49,17 @@ from textual.widgets import (
     RichLog,
     Input,
     Label,
-    Checkbox,
+    Checkbox as TextualCheckbox,
     Select,
     DirectoryTree,
 )
 from textual.widgets._directory_tree import DirEntry
+
+
+class Checkbox(TextualCheckbox):
+    """Custom Checkbox using a checkmark instead of X."""
+
+    BUTTON = "✓"
 
 
 class PlainDirectoryTree(DirectoryTree):
@@ -67,25 +84,77 @@ class PlainDirectoryTree(DirectoryTree):
         return label
 
 
-# Configure logging (disabled by default)
+# Configure logging
 logger.remove()  # Remove default handler to disable all logging
-# Uncomment below to enable file logging for debugging
-# logger.add(
-#     "logs/dnsscanner_{time}.log",
-#     rotation="50 MB",
-#     compression="zip",
-#     level="DEBUG",
-# )
+os.makedirs("logs", exist_ok=True)
+logger.add(
+    "logs/dnsscanner_{time}.log",
+    rotation="50 MB",
+    compression="zip",
+    level="DEBUG",
+)
+
+
+# Pre-compiled regex for stripping ANSI escape codes (used in proxy test output)
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _run_slipstream_sync(
+    cmd: list, timeout: float = 15.0
+) -> tuple:
+    """Start slipstream and block-read stdout until 'Connection ready' or timeout.
+
+    Designed to run in a background thread (via asyncio.to_thread) because
+    asyncio.create_subprocess_exec is not supported on Windows with the Selector
+    event loop that aiodns requires.
+
+    Returns:
+        (process, connection_ready: bool, lines: list[str])
+        The process is NOT killed here; caller handles cleanup.
+    """
+    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        creationflags=creationflags,
+    )
+
+    lines: list[str] = []
+    connection_ready = False
+
+    def _reader():
+        nonlocal connection_ready
+        try:
+            for raw in proc.stdout:
+                clean = _ANSI_ESCAPE_RE.sub(
+                    "", raw.decode("utf-8", "ignore")
+                ).strip()
+                lines.append(clean)
+                if "Connection ready" in clean:
+                    connection_ready = True
+                    return  # Stop reading; leave process running for proxy use
+        except Exception:
+            pass
+
+    reader = threading.Thread(target=_reader, daemon=True)
+    reader.start()
+    reader.join(timeout=timeout)
+    # If the reader is still alive after timeout: connection_ready is still False.
+    # The caller will kill the process (which closes stdout → _reader exits).
+    return proc, connection_ready, lines
 
 
 class SlipstreamManager:
     """Manages slipstream client download and execution across platforms."""
 
     DOWNLOAD_URLS = {
-        "Darwin-arm64": "https://github.com/AliRezaBeigy/slipstream-rust-deploy/releases/latest/download/slipstream-client-darwin-arm64",
-        "Darwin-x86_64": "https://github.com/AliRezaBeigy/slipstream-rust-deploy/releases/latest/download/slipstream-client-darwin-amd64",
-        "Windows": "https://github.com/AliRezaBeigy/slipstream-rust-deploy/releases/latest/download/slipstream-client-windows-amd64.exe",
-        "Linux": "https://github.com/AliRezaBeigy/slipstream-rust-deploy/releases/latest/download/slipstream-client-linux-amd64",
+        "Darwin-arm64": "https://github.com/Fox-Fig/slipstream-rust-plus-deploy/releases/latest/download/slipstream-client-darwin-arm64",
+        "Darwin-x86_64": "https://github.com/Fox-Fig/slipstream-rust-plus-deploy/releases/latest/download/slipstream-client-darwin-amd64",
+        "Windows": "https://github.com/Fox-Fig/slipstream-rust-plus-deploy/releases/latest/download/slipstream-client-windows-amd64.exe",
+        "Linux-x86_64": "https://github.com/Fox-Fig/slipstream-rust-plus-deploy/releases/latest/download/slipstream-client-linux-amd64",
+        "Linux-arm64": "https://github.com/Fox-Fig/slipstream-rust-plus-deploy/releases/latest/download/slipstream-client-linux-arm64",
+        "Android": "https://github.com/Fox-Fig/slipstream-rust-plus-deploy/releases/latest/download/slipstream-client-linux-arm64",
     }
 
     # Windows DLL dependencies (required for slipstream-client on Windows)
@@ -99,7 +168,9 @@ class SlipstreamManager:
         "Darwin-arm64": "slipstream-client-darwin-arm64",
         "Darwin-x86_64": "slipstream-client-darwin-amd64",
         "Windows": "slipstream-client-windows-amd64.exe",
-        "Linux": "slipstream-client-linux-amd64",
+        "Linux-x86_64": "slipstream-client-linux-amd64",
+        "Linux-arm64": "slipstream-client-linux-arm64",
+        "Android": "slipstream-client-linux-arm64",
     }
 
     # Alternative filenames to check (for backwards compatibility)
@@ -107,34 +178,62 @@ class SlipstreamManager:
         "Windows": ["slipstream-client.exe", "slipstream-client-windows-amd64.exe"],
         "Darwin-arm64": ["slipstream-client", "slipstream-client-darwin-arm64"],
         "Darwin-x86_64": ["slipstream-client", "slipstream-client-darwin-amd64"],
-        "Linux": ["slipstream-client", "slipstream-client-linux-amd64"],
+        "Linux-x86_64": ["slipstream-client", "slipstream-client-linux-amd64"],
+        "Linux-arm64": ["slipstream-client", "slipstream-client-linux-arm64"],
+        "Android": ["slipstream-client", "slipstream-client-linux-arm64"],
     }
 
     PLATFORM_DIRS = {
         "Darwin": "mac",
         "Windows": "windows",
         "Linux": "linux",
+        "Android": "android",
     }
 
     def __init__(self):
         self.base_dir = Path(__file__).parent / "slipstream-client"
-        self.system = platform.system()
+        self.system = self._detect_system()
         self.machine = platform.machine()
         self._cached_executable_path: Optional[Path] = None
 
         # Normalize machine architecture
         if self.machine in ("x86_64", "AMD64", "i386", "i686", "x86"):
             self.machine = "x86_64"
-        elif self.machine == "aarch64":
+        elif self.machine in ("aarch64", "arm64", "armv8l"):
             self.machine = "arm64"
+        elif self.machine.startswith("arm"):
+            # For other ARM variants (armv7l, etc.), use arm64 binary
+            self.machine = "arm64"
+
+    @staticmethod
+    def _detect_system() -> str:
+        """Detect the operating system, including Android."""
+        # Check for Android first (before Linux check)
+        if os.environ.get("ANDROID_ROOT") or os.environ.get("ANDROID_DATA"):
+            return "Android"
+        
+        # Check for Termux (common Android terminal emulator)
+        if os.environ.get("TERMUX_VERSION") or Path("/data/data/com.termux").exists():
+            return "Android"
+        
+        # Check for Android build.prop
+        if Path("/system/build.prop").exists():
+            return "Android"
+        
+        # Fall back to standard platform detection
+        return platform.system()
 
     def get_platform_key(self) -> str:
         """Get the platform key for download URLs."""
         # Windows uses a single key (no architecture differentiation)
         if self.system == "Windows":
             return "Windows"
+        elif self.system == "Android":
+            # Android always uses ARM64 binary (most Android devices are ARM)
+            return "Android"
         elif self.system == "Linux":
-            return "Linux"
+            # Linux differentiates between x86_64 and ARM64
+            return f"Linux-{self.machine}"
         elif self.system == "Darwin":
             # macOS differentiates between ARM and Intel
             return f"Darwin-{self.machine}"
@@ -727,8 +826,9 @@ class CustomProgressBar(Static):
 
 
 class DNSScannerTUI(App):
-    """PYDNS Scanner with Textual TUI."""
+    """PYDNS-Scanner with Textual TUI."""
 
+    TITLE = "PYDNS-Scanner"
     # Set Dracula theme as default
     ENABLE_COMMAND_PALETTE = False  # Disable command palette
 
@@ -775,25 +875,34 @@ class DNSScannerTUI(App):
         overflow-y: auto;
     }
     
-    #start-title {
-        width: 100%;
-        text-align: center;
-        text-style: bold;
-        color: #58a6ff;
-        padding: 1;
-    }
-    
     .form-row {
         width: 100%;
         height: auto;
         min-height: 3;
         margin: 1 0;
+        align: left middle;
     }
     
     .form-label {
         width: 20;
         padding: 0 1;
         color: #c9d1d9;
+        content-align: left middle;
+        align: left middle;
+    }
+
+    .field-label {
+        width: 100%;
+        text-align: center;
+        content-align: center middle;
+        color: #8b949e;
+        padding: 0 0 1 0;
+    }
+
+    .form-field {
+        width: 1fr;
+        height: auto;
+        padding: 0 1;
     }
     
     .form-input {
@@ -907,13 +1016,18 @@ class DNSScannerTUI(App):
     }
 
     #stats {
-        width: 100%;
-        height: auto;
+        width: 1fr;
+        height: 100%;
         border: solid #238636;
         background: #161b22;
         padding: 1;
         margin: 1;
         color: #c9d1d9;
+    }
+
+    #stats-logs-container {
+        width: 100%;
+        height: 14;
     }
 
     #progress-bar {
@@ -932,25 +1046,29 @@ class DNSScannerTUI(App):
         color: #238636;
     }
 
-    #main-content {
+    #results {
         width: 100%;
         height: 1fr;
-    }
-
-    #results {
-        width: 60%;
-        height: 100%;
-        border: solid #58a6ff;
         background: #161b22;
-        margin: 1;
+        margin: 0 1;
+        padding: 1;
     }
 
     #logs {
-        width: 40%;
+        width: 1fr;
         height: 100%;
         border: solid #d29922;
         background: #161b22;
         margin: 1;
+        padding: 1;
+    }
+
+    #log-display {
+        height: 100%;
+    }
+    
+    .hidden {
+        display: none;
     }
 
     #controls {
@@ -1010,22 +1128,56 @@ class DNSScannerTUI(App):
         height: 100%;
         background: #161b22;
         color: #c9d1d9;
+        scrollbar-size: 0 1;
     }
     
     Checkbox {
         background: transparent;
-        color: #c9d1d9;
+        color: #8b949e;
         margin-right: 2;
     }
-    
+
+    Checkbox > .toggle--button {
+        background: transparent;
+        border: solid #30363d;
+        color: #8b949e;
+        width: 3;
+    }
+
+    Checkbox.-on {
+        color: #c9d1d9;
+    }
+
+    Checkbox.-on > .toggle--button {
+        background: #238636;
+        border: solid #238636;
+        color: #ffffff;
+    }
+
     Checkbox:focus > .toggle--button {
-        background: #58a6ff;
+        border: solid #58a6ff;
     }
     
     .checkbox-row {
         align: center middle;
         height: auto;
         padding: 1 0;
+    }
+
+    .domain-row {
+        height: 6;
+    }
+
+    .domain-checkboxes {
+        width: auto;
+        height: 100%;
+        align: left middle;
+        padding: 0 2;
+        margin-top: 2;
+    }
+
+    .domain-field {
+        align: center top;
     }
     """
 
@@ -1036,6 +1188,7 @@ class DNSScannerTUI(App):
         ("p", "pause_scan", "Pause"),
         ("r", "resume_scan", "Resume"),
         ("x", "shuffle_ips", "Shuffle"),
+        ("l", "toggle_logs", "Logs"),
     ]
 
     def __init__(self):
@@ -1044,13 +1197,49 @@ class DNSScannerTUI(App):
         self.selected_cidr_file = ""  # Track custom selected file
         self.domain = ""
         self.dns_type = "A"
-        self.concurrency = 100
+        self.dns_test_method = "udp"  # "udp" (port 53)
+        # Calculate default concurrency as 70% of optimal
+        optimal = self._get_optimal_concurrency()
+        self.concurrency = int(optimal * 0.3)
         self.random_subdomain = False
         self.test_slipstream = False
         self.bell_sound_enabled = False  # Bell sound on pass
         self.proxy_auth_enabled = False  # Proxy authentication
         self.proxy_username = ""  # Proxy username
         self.proxy_password = ""  # Proxy password
+
+        # Scan preset settings
+        self.scan_preset = "fast"  # "fast", "deep", "full"
+        self.preset_max_ips = 0  # 0 = unlimited
+        self.preset_shuffle_threshold = 0  # Auto-shuffle after N IPs with no find
+        self.preset_auto_shuffle = False
+        self.ips_since_last_found = 0  # Counter for auto-shuffle logic
+        self.auto_shuffle_count = 0  # How many auto-shuffles performed
+        # Apply fast preset defaults
+        self._apply_scan_preset()
+
+        # General settings - advanced tests
+        self.security_test_enabled = True  # DNS hijacking, DNSSEC, open resolver
+        self.ipv6_test_enabled = True  # IPv6 DNS test
+        self.resolve_results: dict[str, str] = {}  # IP -> resolved IP address string
+        self.edns0_test_enabled = True  # EDNS0 support test
+        self.isp_info_enabled = True  # AS/ISP information lookup
+
+        # Advanced test results storage
+        self.security_results: dict[str, dict] = {}  # IP -> {dnssec, hijacked, open, filtered}
+        self.protocol_results: dict[str, dict] = {}  # IP -> {ipv6, edns0}
+        self.isp_results: dict[str, dict] = {}  # IP -> {asn, org, country}
+        self.tcp_udp_results: dict[str, str] = {}  # IP -> "TCP/UDP", "TCP only", "UDP only"
+        self.extra_test_tasks: set = set()  # Track running extra test tasks
+        self.extra_test_semaphore: asyncio.Semaphore | None = None  # Limits concurrent extra tests
+
+        # Incremental pass/fail counters (avoids O(n) scans of proxy_results)
+        self._passed_count = 0
+        self._failed_count = 0
+
+        # Cached widget references (populated in on_mount)
+        self._stats_widget: "StatsWidget | None" = None
+        self._progress_bar_widget: "CustomProgressBar | None" = None
 
         # Config file for caching settings
         self.config_dir = Path.home() / ".pydns-scanner"
@@ -1059,6 +1248,9 @@ class DNSScannerTUI(App):
         self.slipstream_manager = SlipstreamManager()
         self.slipstream_path = str(self.slipstream_manager.get_executable_path())
         self.slipstream_domain = ""
+
+        # whether to perform the full HTTP/SOCKS check after slipstream starts
+
         self.found_servers: Set[str] = set()  # Keep found servers for results
         self.server_times: dict[str, float] = {}
         self.proxy_results: dict[str, str] = (
@@ -1092,9 +1284,10 @@ class DNSScannerTUI(App):
             []
         )  # Track all slipstream processes for cleanup
 
-        # Shuffle support
-        self.remaining_ips: list = []  # Track remaining IPs for shuffle feature
-        # Note: tested_ips removed for better memory management - only used temporarily during shuffle
+        # Shuffle support - memory efficient
+        self.remaining_ips: list = []  # Legacy, kept for compat
+        self.shuffle_signal: asyncio.Event | None = None  # Signal to reshuffle during scan
+        self.tested_subnets: set[str] = set()  # Track completed /24 blocks (memory-efficient)
 
     def compose(self) -> ComposeResult:
         """Create child widgets."""
@@ -1103,45 +1296,49 @@ class DNSScannerTUI(App):
         # Start Screen
         with Container(id="start-screen"):
             with Vertical(id="start-form"):
-                yield Static(
-                    "[b cyan]PYDNS Scanner Configuration[/b cyan]", id="start-title"
-                )
-
                 with Horizontal(classes="form-row"):
-                    yield Label("CIDR File:", classes="form-label")
-                    yield Select(
-                        [("Iran IPs (~10M IPs)", "iran"), ("Custom File...", "custom")],
-                        value="iran",
-                        allow_blank=False,
-                        id="input-cidr-select",
-                        classes="form-input",
-                    )
+                    with Vertical(classes="form-field"):
+                        yield Label("CIDR File:", classes="field-label")
+                        yield Select(
+                            [("Iran IPs (~10M IPs)", "iran"), ("Custom File...", "custom")],
+                            value="iran",
+                            allow_blank=False,
+                            id="input-cidr-select",
+                        )
+                    with Vertical(classes="form-field"):
+                        yield Label("Scan Mode:", classes="field-label")
+                        yield Select(
+                            [
+                                ("Fast Scan (25K, shuffle/500)", "fast"),
+                                ("Deep Scan (50k, shuffle/1K)", "deep"),
+                                ("Full Scan (shuffle/3K)", "full"),
+                            ],
+                            value="fast",
+                            allow_blank=False,
+                            id="input-preset",
+                        )
 
                 with Container(id="file-browser-container"):
                     yield PlainDirectoryTree(".", id="file-browser")
 
-                with Horizontal(classes="form-row"):
-                    yield Label("Domain:", classes="form-label")
-                    yield Input(
-                        placeholder="e.g., google.com",
-                        id="input-domain",
-                        classes="form-input",
-                    )
-
-                with Horizontal(classes="form-row"):
-                    yield Label("Proxy Auth:", classes="form-label")
-                    yield Checkbox("Enable", id="input-proxy-auth")
+                with Horizontal(classes="form-row domain-row"):
+                    with Vertical(classes="form-field domain-field"):
+                        yield Label("Domain:", classes="field-label")
+                        yield Input(
+                            placeholder="e.g., google.com",
+                            id="input-domain",
+                        )
+                    with Horizontal(classes="domain-checkboxes"):
+                        yield Checkbox("Random Subdomain", id="input-random")
+                        yield Checkbox("Proxy Auth", id="input-proxy-auth")
 
                 with Container(id="proxy-auth-container"):
                     with Horizontal(classes="form-row"):
-                        yield Label("Username:", classes="form-label")
                         yield Input(
                             placeholder="proxy username",
                             id="input-proxy-user",
                             classes="form-input",
                         )
-                    with Horizontal(classes="form-row"):
-                        yield Label("Password:", classes="form-label")
                         yield Input(
                             placeholder="proxy password",
                             id="input-proxy-pass",
@@ -1150,32 +1347,31 @@ class DNSScannerTUI(App):
                         )
 
                 with Horizontal(classes="form-row"):
-                    yield Label("DNS Type:", classes="form-label")
-                    yield Select(
-                        [
-                            ("A (IPv4)", "A"),
-                            ("AAAA (IPv6)", "AAAA"),
-                            ("MX (Mail)", "MX"),
-                            ("TXT", "TXT"),
-                            ("NS", "NS"),
-                        ],
-                        value="A",
-                        allow_blank=False,
-                        id="input-type",
-                        classes="form-input",
-                    )
+                    with Vertical(classes="form-field"):
+                        yield Label("DNS Type:", classes="field-label")
+                        yield Select(
+                            [
+                                ("A (IPv4)", "A"),
+                                ("AAAA (IPv6)", "AAAA"),
+                                ("MX (Mail)", "MX"),
+                                ("TXT", "TXT"),
+                                ("NS", "NS"),
+                            ],
+                            value="A",
+                            allow_blank=False,
+                            id="input-type",
+                        )
 
                 with Horizontal(classes="form-row"):
-                    yield Label("Concurrency:", classes="form-label")
-                    yield Input(
-                        placeholder="100",
-                        id="input-concurrency",
-                        classes="form-input",
-                        value="100",
-                    )
+                    with Vertical(classes="form-field"):
+                        yield Label("Concurrency:", classes="field-label")
+                        yield Input(
+                            placeholder="70% of optimal",
+                            id="input-concurrency",
+                            value=str(self.concurrency),
+                        )
 
                 with Horizontal(classes="form-row checkbox-row"):
-                    yield Checkbox("Random Subdomain", id="input-random")
                     yield Checkbox("Proxy Test", id="input-slipstream")
                     yield Checkbox("Bell on Pass", id="input-bell")
 
@@ -1185,14 +1381,14 @@ class DNSScannerTUI(App):
 
         # Scan Screen (initially hidden)
         with Container(id="scan-screen"):
-            yield StatsWidget(id="stats")
+            with Horizontal(id="stats-logs-container"):
+                yield StatsWidget(id="stats")
+                with Container(id="logs", classes="hidden"):
+                    yield RichLog(id="log-display", highlight=True, markup=True)
             with Container(id="progress-container"):
                 yield CustomProgressBar(id="progress-bar")
-            with Horizontal(id="main-content"):
-                with Container(id="results"):
-                    yield DataTable(id="results-table")
-                with Container(id="logs"):
-                    yield RichLog(id="log-display", highlight=True, markup=True)
+            with Container(id="results"):
+                yield DataTable(id="results-table")
             with Horizontal(id="controls"):
                 yield Button("⏸  Pause", id="pause-btn", variant="warning")
                 yield Button("🔀 Shuffle", id="shuffle-btn", variant="default")
@@ -1203,46 +1399,43 @@ class DNSScannerTUI(App):
         yield Footer()
 
     def _load_cached_domain(self) -> str:
-        """Load last used domain from config file."""
+        """Load last used domain from config file (legacy compatibility)."""
+        config = self._load_config()
+        return config.get("domain", "")
+
+    def _load_config(self) -> dict:
+        """Load complete configuration from file."""
         try:
             if self.config_file.exists():
                 with open(self.config_file, "r", encoding="utf-8") as f:
-                    config = json.load(f)
-                    return config.get("last_domain", "")
+                    return json.load(f)
         except (json.JSONDecodeError, KeyError) as e:
             logger.debug(f"Config file corrupted or invalid, ignoring: {e}")
         except (OSError, IOError) as e:
             logger.debug(f"Failed to read config file: {e}")
         except Exception as e:
-            logger.warning(f"Unexpected error loading cached domain: {e}")
-        return ""
+            logger.warning(f"Unexpected error loading config: {e}")
+        return {}
 
     def _save_domain_cache(self, domain: str) -> None:
-        """Save domain to config file for next session."""
+        """Save domain to config (legacy method, use _save_config instead)."""
+        config = self._load_config()
+        config["domain"] = domain
+        self._save_config(config)
+
+    def _save_config(self, config: dict) -> None:
+        """Save complete configuration to file."""
         try:
             # Create config directory if it doesn't exist
             self.config_dir.mkdir(parents=True, exist_ok=True)
-
-            # Load existing config or create new
-            config = {}
-            if self.config_file.exists():
-                try:
-                    with open(self.config_file, "r", encoding="utf-8") as f:
-                        config = json.load(f)
-                except (json.JSONDecodeError, OSError):
-                    # Start fresh if config is corrupted
-                    config = {}
-
-            # Update domain
-            config["last_domain"] = domain
 
             # Save config
             with open(self.config_file, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=2)
         except (OSError, IOError) as e:
-            logger.debug(f"Failed to save domain cache (permission/IO error): {e}")
+            logger.debug(f"Failed to save config (permission/IO error): {e}")
         except Exception as e:
-            logger.warning(f"Unexpected error saving domain cache: {e}")
+            logger.warning(f"Unexpected error saving config: {e}")
 
     def on_mount(self) -> None:
         """Initialize when app is mounted."""
@@ -1255,18 +1448,68 @@ class DNSScannerTUI(App):
         # Hide scan screen initially
         self.query_one("#scan-screen").display = False
 
-        # Load cached domain and set it
-        cached_domain = self._load_cached_domain()
+        # Load configuration and populate form
+        config = self._load_config()
         try:
-            domain_input = self.query_one("#input-domain", Input)
-            domain_input.value = cached_domain
-        except Exception as e:
-            logger.debug(f"Could not set cached domain (widget may not be ready): {e}")
+            # Domain
+            if config.get("domain"):
+                domain_input = self.query_one("#input-domain", Input)
+                domain_input.value = config["domain"]
 
-        # Setup results table
-        table = self.query_one("#results-table", DataTable)
-        table.add_columns("IP Address", "Response Time", "Status", "Proxy Test")
-        table.cursor_type = "row"
+            # Concurrency
+            if config.get("concurrency"):
+                concurrency_input = self.query_one("#input-concurrency", Input)
+                concurrency_input.value = str(config["concurrency"])
+
+            # DNS Type
+            if config.get("dns_type"):
+                type_select = self.query_one("#input-type", Select)
+                type_select.value = config["dns_type"]
+
+            # Scan Preset
+            if config.get("scan_preset"):
+                preset_select = self.query_one("#input-preset", Select)
+                preset_select.value = config["scan_preset"]
+
+            # Proxy Auth
+            if config.get("proxy_auth_enabled"):
+                proxy_auth_checkbox = self.query_one("#input-proxy-auth", Checkbox)
+                proxy_auth_checkbox.value = config["proxy_auth_enabled"]
+                # Show proxy auth container
+                self.query_one("#proxy-auth-container").display = True
+
+                # Proxy credentials
+                if config.get("proxy_username"):
+                    proxy_user_input = self.query_one("#input-proxy-user", Input)
+                    proxy_user_input.value = config["proxy_username"]
+
+                if config.get("proxy_password"):
+                    # Decode password from base64
+                    import base64
+                    try:
+                        decoded_pass = base64.b64decode(config["proxy_password"]).decode("utf-8")
+                        proxy_pass_input = self.query_one("#input-proxy-pass", Input)
+                        proxy_pass_input.value = decoded_pass
+                    except Exception:
+                        pass
+
+            # slipstream settings
+            if config.get("slipstream_enabled") is not None:
+                slip_checkbox = self.query_one("#input-slipstream", Checkbox)
+                slip_checkbox.value = config.get("slipstream_enabled")
+
+        except Exception as e:
+            logger.debug(f"Could not set cached config values: {e}")
+
+        # Setup both results tables
+        self._setup_table_columns()
+
+        # Cache frequently accessed widget references
+        try:
+            self._stats_widget = self.query_one("#stats", StatsWidget)
+            self._progress_bar_widget = self.query_one("#progress-bar", CustomProgressBar)
+        except Exception as e:
+            logger.debug(f"Could not cache widget refs: {e}")
 
         # Hide pause/resume/shuffle buttons initially
         try:
@@ -1276,11 +1519,40 @@ class DNSScannerTUI(App):
         except Exception as e:
             logger.debug(f"Could not hide buttons during mount: {e}")
 
+    def _get_table_columns(self) -> list[tuple[str, str, int | None]]:
+        """Return list of (label, key, width) for unified results table."""
+        cols: list[tuple[str, str, int | None]] = [
+            ("IP Address", "ip", None),
+            ("Ping", "time", None),
+        ]
+        if self.test_slipstream:
+            cols.append(("Proxy Test", "proxy", None))
+        cols.append(("IPv4/IPv6", "ipver", None))
+        cols.append(("Security", "security", None))
+        cols.append(("TCP/UDP", "tcpudp", None))
+        cols.append(("EDNS0", "edns0", None))
+        cols.append(("Resolved IP", "resolved", None))
+        cols.append(("ISP", "isp", 50))
+        return cols
+
+    def _setup_table_columns(self) -> None:
+        """Setup unified results table with proper columns."""
+        try:
+            table = self.query_one("#results-table", DataTable)
+            table.clear(columns=True)
+            for label, key, width in self._get_table_columns():
+                table.add_column(label, key=key, width=width)
+            table.cursor_type = "row"
+        except Exception as e:
+            logger.debug(f"Could not setup table columns: {e}")
+
     def action_quit(self) -> None:
         """Gracefully quit the application with proper cleanup."""
         # Signal shutdown to stop any running scans
         if self._shutdown_event:
             self._shutdown_event.set()
+        if self.shuffle_signal:
+            self.shuffle_signal.set()  # Unblock any shuffle wait
 
         # Kill all slipstream processes immediately
         if hasattr(self, "slipstream_processes"):
@@ -1294,7 +1566,7 @@ class DNSScannerTUI(App):
 
         # Cancel all active scan tasks
         if hasattr(self, "active_scan_tasks"):
-            for task in self.active_scan_tasks[:]:
+            for task in list(self.active_scan_tasks):
                 try:
                     if not task.done():
                         task.cancel()
@@ -1311,6 +1583,16 @@ class DNSScannerTUI(App):
                 except Exception as e:
                     logger.debug(f"Could not cancel slipstream task: {e}")
             self.slipstream_tasks.clear()
+
+        # Cancel all extra test tasks
+        if hasattr(self, "extra_test_tasks"):
+            for task in list(self.extra_test_tasks):
+                try:
+                    if not task.done():
+                        task.cancel()
+                except Exception as e:
+                    logger.debug(f"Could not cancel extra test task: {e}")
+            self.extra_test_tasks.clear()
 
         # Cancel all Textual workers
         try:
@@ -1370,6 +1652,9 @@ class DNSScannerTUI(App):
         if self.scan_started and not self.is_paused:
             self._pause_scan()
             self._update_keybinding_visibility(scanning=True, paused=True)
+            # Rebuild table when paused so user sees sorted results
+            self.table_needs_rebuild = True
+            self._rebuild_table()
 
     def action_resume_scan(self) -> None:
         """Keybinding action to resume scan."""
@@ -1378,9 +1663,25 @@ class DNSScannerTUI(App):
             self._update_keybinding_visibility(scanning=True, paused=False)
 
     def action_shuffle_ips(self) -> None:
-        """Keybinding action to shuffle IPs (only when paused)."""
-        if self.scan_started and self.is_paused:
-            self.run_worker(self._shuffle_remaining_ips_async(), exclusive=False)
+        """Keybinding action to shuffle IPs - instant, no pause needed."""
+        if self.scan_started and not (self._shutdown_event and self._shutdown_event.is_set()):
+            if self.shuffle_signal:
+                self.shuffle_signal.set()
+                self._log("[cyan]Shuffle requested - reshuffling IP order...[/cyan]")
+                self.notify("Shuffling IP order...", severity="information", timeout=2)
+                # Force immediate yield to process shuffle signal
+                self.call_later(lambda: None)
+    
+    def action_toggle_logs(self) -> None:
+        """Toggle log panel visibility with 'L' key."""
+        try:
+            logs_container = self.query_one("#logs")
+            if "hidden" in logs_container.classes:
+                logs_container.remove_class("hidden")
+            else:
+                logs_container.add_class("hidden")
+        except Exception as e:
+            logger.debug(f"Could not toggle logs: {e}")
 
     def action_start_scan(self) -> None:
         """Keybinding action to start scan from config screen."""
@@ -1412,11 +1713,16 @@ class DNSScannerTUI(App):
                 self.action_quit()
             elif event.button.id == "pause-btn":
                 self._pause_scan()
+                # Rebuild table when paused so user sees sorted results
+                self.table_needs_rebuild = True
+                self._rebuild_table()
+                self._update_keybinding_visibility(scanning=True, paused=True)
             elif event.button.id == "resume-btn":
                 self._resume_scan()
+                self._update_keybinding_visibility(scanning=True, paused=False)
             elif event.button.id == "shuffle-btn":
-                # Run async shuffle in worker
-                self.run_worker(self._shuffle_remaining_ips_async(), exclusive=False)
+                # Instant shuffle - no pause needed
+                self.action_shuffle_ips()
             elif event.button.id == "save-btn":
                 self.action_save_results()
             elif event.button.id == "quit-btn":
@@ -1459,15 +1765,20 @@ class DNSScannerTUI(App):
         # Store the selected file path
         self.selected_cidr_file = selected_file
 
-        # Keep dropdown at "custom" value without adding new option
+        # Update dropdown to add selected file as third option
         cidr_select = self.query_one("#input-cidr-select", Select)
-        cidr_select.value = "custom"
+        file_name = Path(selected_file).name
+        cidr_select.set_options([
+            ("Iran IPs (~10M IPs)", "iran"),
+            ("Custom File...", "custom"),
+            (file_name, "selected_file"),
+        ])
+        cidr_select.value = "selected_file"
 
         # Hide browser after selection
         self.query_one("#file-browser-container").display = False
 
         # Notify user which file was selected
-        file_name = Path(selected_file).name
         self.notify(f"Selected: {file_name}", severity="information", timeout=3)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -1493,11 +1804,26 @@ class DNSScannerTUI(App):
         self._log("[yellow]⏸  Scan paused[/yellow]")
         self.notify("Scan paused", severity="warning")
 
-        # Update button visibility
+        # Update button visibility with explicit refresh for immediate UI update
         try:
-            self.query_one("#pause-btn", Button).display = False
-            self.query_one("#resume-btn", Button).display = True
-            self.query_one("#shuffle-btn", Button).display = True
+            pause_btn = self.query_one("#pause-btn", Button)
+            resume_btn = self.query_one("#resume-btn", Button)
+            shuffle_btn = self.query_one("#shuffle-btn", Button)
+            
+            pause_btn.display = False
+            resume_btn.display = True
+            shuffle_btn.display = True
+            
+            # Force immediate refresh to update UI even during heavy load
+            pause_btn.refresh()
+            resume_btn.refresh()
+            shuffle_btn.refresh()
+            
+            # Refresh parent container to ensure layout updates
+            try:
+                self.query_one("#controls").refresh()
+            except Exception:
+                pass
         except Exception as e:
             logger.debug(f"Could not update button visibility on pause: {e}")
 
@@ -1519,16 +1845,78 @@ class DNSScannerTUI(App):
         self._log("[green]▶  Scan resumed[/green]")
         self.notify("Scan resumed", severity="information")
 
-        # Update button visibility
+        # Update button visibility with explicit refresh for immediate UI update
         try:
-            self.query_one("#pause-btn", Button).display = True
-            self.query_one("#resume-btn", Button).display = False
-            self.query_one("#shuffle-btn", Button).display = False
+            pause_btn = self.query_one("#pause-btn", Button)
+            resume_btn = self.query_one("#resume-btn", Button)
+            shuffle_btn = self.query_one("#shuffle-btn", Button)
+            
+            pause_btn.display = True
+            resume_btn.display = False
+            shuffle_btn.display = False
+            
+            # Force immediate refresh to update UI even during heavy load
+            pause_btn.refresh()
+            resume_btn.refresh()
+            shuffle_btn.refresh()
+            
+            # Refresh parent container to ensure layout updates
+            try:
+                self.query_one("#controls").refresh()
+            except Exception:
+                pass
         except Exception as e:
             logger.debug(f"Could not update button visibility on resume: {e}")
 
         # Update keybinding visibility
         self._update_keybinding_visibility(scanning=True, paused=False)
+
+    def _get_optimal_concurrency(self) -> int:
+        """Calculate optimal concurrency based on system resources."""
+        try:
+            cpu_count = os.cpu_count() or 2
+            # Try to detect available memory
+            try:
+                import shutil
+                total, used, free = shutil.disk_usage("/")
+                # Use a simple heuristic based on CPU count
+                if cpu_count >= 8:
+                    return 500
+                elif cpu_count >= 4:
+                    return 200
+                else:
+                    return 100
+            except Exception:
+                pass
+
+            # Fallback: scale based on CPU count
+            if cpu_count >= 8:
+                return 500
+            elif cpu_count >= 4:
+                return 200
+            else:
+                return 100
+        except Exception:
+            return 100
+
+    def _apply_scan_preset(self) -> None:
+        """Apply scan preset settings."""
+        if self.scan_preset == "fast":
+            self.preset_max_ips = 25000
+            self.preset_shuffle_threshold = 500
+            self.preset_auto_shuffle = True
+        elif self.scan_preset == "deep":
+            self.preset_max_ips = 50000  # 50K max for deep scan
+            self.preset_shuffle_threshold = 1000
+            self.preset_auto_shuffle = True
+        elif self.scan_preset == "full":
+            self.preset_max_ips = 0  # Unlimited
+            self.preset_shuffle_threshold = 3000
+            self.preset_auto_shuffle = True
+        else:  # Default to fast
+            self.preset_max_ips = 25000
+            self.preset_shuffle_threshold = 500
+            self.preset_auto_shuffle = True
 
     def _start_scan_from_form(self) -> None:
         """Get values from form and start scanning."""
@@ -1555,7 +1943,14 @@ class DNSScannerTUI(App):
                 return
             self.subnet_file = str(iran_cidr_path)
         elif cidr_value == "custom":
-            # Use the custom selected file
+            # User selected "Custom File..." but hasn't picked a file yet
+            self.notify(
+                "Please select a CIDR file from the file browser!",
+                severity="warning",
+            )
+            return
+        elif cidr_value == "selected_file":
+            # Use the previously selected custom file
             if not self.selected_cidr_file:
                 self.notify(
                     "Please select a CIDR file from the file browser!",
@@ -1592,17 +1987,48 @@ class DNSScannerTUI(App):
                 self.notify("Please enter proxy username!", severity="error")
                 return
 
-        try:
-            self.concurrency = int(concurrency_input.value.strip() or "100")
-        except ValueError:
-            self.concurrency = 100
+        # Get scan preset
+        preset_select = self.query_one("#input-preset", Select)
+        self.scan_preset = str(preset_select.value) if preset_select.value else "fast"
+        self._apply_scan_preset()
+
+        # Get concurrency (auto or manual)
+        concurrency_str = concurrency_input.value.strip().lower()
+        if concurrency_str == "auto" or not concurrency_str:
+            # Calculate 70% of optimal
+            optimal = self._get_optimal_concurrency()
+            self.concurrency = int(optimal * 0.7)
+        else:
+            try:
+                self.concurrency = int(concurrency_str)
+            except ValueError:
+                optimal = self._get_optimal_concurrency()
+                self.concurrency = int(optimal * 0.7)
+
+        # Get general settings (NOT saved - user selects each time)
+        # All general settings are now always enabled
+
+        # Rebuild table columns based on enabled tests
+        self._setup_table_columns()
 
         if not self.domain:
             self.notify("Please enter a domain!", severity="error")
             return
 
-        # Save domain for next session
-        self._save_domain_cache(self.domain)
+        # Save configuration for next session
+        import base64
+        config = {
+            "domain": self.domain,
+            "dns_type": self.dns_type,
+            "scan_preset": self.scan_preset,
+            "concurrency": self.concurrency,
+            "proxy_auth_enabled": self.proxy_auth_enabled,
+            "proxy_username": self.proxy_username if self.proxy_auth_enabled else "",
+            "proxy_password": base64.b64encode(self.proxy_password.encode("utf-8")).decode("utf-8") if self.proxy_auth_enabled and self.proxy_password else "",
+            # slipstream-related flags
+            "slipstream_enabled": self.test_slipstream,
+        }
+        self._save_config(config)
 
         # Check slipstream version and update if needed
         if self.test_slipstream:
@@ -1623,16 +2049,29 @@ class DNSScannerTUI(App):
         except Exception as e:
             logger.debug(f"Could not update button visibility after form submit: {e}")
 
-        # Setup log display
+        # Setup log display AFTER switching to scan screen
         log_widget = self.query_one("#log-display", RichLog)
         log_widget.write("[bold cyan]PYDNS Scanner Log[/bold cyan]")
         log_widget.write(f"[yellow]Subnet file:[/yellow] {self.subnet_file}")
         log_widget.write(f"[yellow]Domain:[/yellow] {self.domain}")
         log_widget.write(f"[yellow]DNS Type:[/yellow] {self.dns_type}")
         log_widget.write(f"[yellow]Concurrency:[/yellow] {self.concurrency}")
+        log_widget.write(f"[yellow]Scan Preset:[/yellow] {self.scan_preset}")
         log_widget.write(
             f"[yellow]Slipstream Test:[/yellow] {'Enabled' if self.test_slipstream else 'Disabled'}"
         )
+        # Log enabled extra tests
+        enabled_tests = []
+        if self.security_test_enabled:
+            enabled_tests.append("Security")
+        if self.ipv6_test_enabled:
+            enabled_tests.append("IPv6")
+        if self.edns0_test_enabled:
+            enabled_tests.append("EDNS0")
+        if self.isp_info_enabled:
+            enabled_tests.append("ISP")
+        if enabled_tests:
+            log_widget.write(f"[yellow]Extra Tests:[/yellow] {', '.join(enabled_tests)}")
         log_widget.write("[green]Starting scan...[/green]\n")
 
         # Start scanning
@@ -1645,12 +2084,15 @@ class DNSScannerTUI(App):
 
     async def _check_update_and_start_scan(self) -> None:
         """Check for slipstream updates and then start the scan."""
-        log_widget = self.query_one("#log-display", RichLog)
+        # Rebuild table columns (test toggles already read)
+        self._setup_table_columns()
 
         # Switch to scan screen to show progress
         self.query_one("#start-screen").display = False
         self.query_one("#scan-screen").display = True
 
+        # Get log widget AFTER switching to scan screen
+        log_widget = self.query_one("#log-display", RichLog)
         log_widget.write("[bold cyan]PYDNS Scanner Log[/bold cyan]")
         log_widget.write("[cyan]Checking Slipstream client...[/cyan]")
 
@@ -1678,7 +2120,20 @@ class DNSScannerTUI(App):
         log_widget.write(f"[yellow]Domain:[/yellow] {self.domain}")
         log_widget.write(f"[yellow]DNS Type:[/yellow] {self.dns_type}")
         log_widget.write(f"[yellow]Concurrency:[/yellow] {self.concurrency}")
+        log_widget.write(f"[yellow]Scan Preset:[/yellow] {self.scan_preset}")
         log_widget.write("[yellow]Slipstream Test:[/yellow] Enabled")
+        # Log enabled extra tests
+        enabled_tests = []
+        if self.security_test_enabled:
+            enabled_tests.append("Security")
+        if self.ipv6_test_enabled:
+            enabled_tests.append("IPv6")
+        if self.edns0_test_enabled:
+            enabled_tests.append("EDNS0")
+        if self.isp_info_enabled:
+            enabled_tests.append("ISP")
+        if enabled_tests:
+            log_widget.write(f"[yellow]Extra Tests:[/yellow] {', '.join(enabled_tests)}")
         log_widget.write("[green]Starting scan...[/green]\n")
 
         # Show pause button, hide resume button
@@ -1757,7 +2212,7 @@ class DNSScannerTUI(App):
             )
 
     async def _scan_async(self) -> None:
-        """Async scanning logic."""
+        """Async scanning logic with instant shuffle support."""
         # Reset state for re-scanning
         self.found_servers.clear()
         self.server_times.clear()
@@ -1765,7 +2220,30 @@ class DNSScannerTUI(App):
         self.current_scanned = 0
         self.table_needs_rebuild = False
         self.remaining_ips.clear()
-        # tested_ips removed for better memory management
+        self.tested_subnets.clear()
+        self.total_ips_yielded = 0  # Track IPs yielded across all stream instances (survives shuffles)
+
+        # Reset extra test state
+        self.security_results.clear()
+        self.protocol_results.clear()
+        self.isp_results.clear()
+        self.resolve_results.clear()
+        self.tcp_udp_results.clear()
+        self.extra_test_tasks.clear()
+        self.extra_test_semaphore = asyncio.Semaphore(5)  # Max 5 concurrent extra tests
+        self._isp_rate_lock = asyncio.Lock()  # Serialize ip-api.com requests
+        self._isp_last_request: float = 0.0   # Monotonic time of last ip-api request
+        self.ips_since_last_found = 0
+        self.auto_shuffle_count = 0
+        self._passed_count = 0
+        self._failed_count = 0
+
+        # Shared HTTP client for extra tests (avoids per-request connection overhead)
+        self._http_client = httpx.AsyncClient(
+            verify=False,
+            timeout=5.0,
+            limits=httpx.Limits(max_connections=30, max_keepalive_connections=10),
+        )
 
         # Force garbage collection after clearing large structures
         gc.collect()
@@ -1774,6 +2252,9 @@ class DNSScannerTUI(App):
         self.is_paused = False
         self.pause_event = asyncio.Event()
         self.pause_event.set()  # Not paused initially
+
+        # Initialize shuffle signal
+        self.shuffle_signal = asyncio.Event()
 
         # Initialize shutdown event for graceful cleanup
         self._shutdown_event = asyncio.Event()
@@ -1794,6 +2275,9 @@ class DNSScannerTUI(App):
         self.last_update_time = self.start_time
         self.last_table_update_time = self.start_time
 
+        # Start periodic sort refresh timer (every 3 seconds)
+        self._sort_refresh_timer = self.set_interval(3.0, self._periodic_sort_refresh)
+
         # Notify user about CIDR loading
         self.notify("Reading CIDR file...", severity="information", timeout=3)
         self._log("[cyan]Analyzing CIDR file...[/cyan]")
@@ -1810,14 +2294,22 @@ class DNSScannerTUI(App):
             self.notify("No valid IPs! Check CIDR file format.", severity="error")
             return
 
-        self._log(f"[cyan]Found {total_ips:,} total IPs to scan. Starting...[/cyan]")
+        # Use preset limit as effective total if set
+        effective_total = total_ips
+        if self.preset_max_ips > 0:
+            effective_total = min(total_ips, self.preset_max_ips)
+            self._log(f"[cyan]Found {total_ips:,} IPs in file. {self.scan_preset.title()} scan limited to {effective_total:,} IPs.[/cyan]")
+        else:
+            self._log(f"[cyan]Found {total_ips:,} total IPs to scan. Starting...[/cyan]")
         await asyncio.sleep(0)
 
         try:
-            stats = self.query_one("#stats", StatsWidget)
-            stats.total = total_ips
-            progress_bar = self.query_one("#progress-bar", CustomProgressBar)
-            progress_bar.update_progress(0, total_ips)
+            stats = self._stats_widget
+            if stats is not None:
+                stats.total = effective_total
+            pb = self._progress_bar_widget
+            if pb is not None:
+                pb.update_progress(0, effective_total)
         except Exception as e:
             logger.debug(f"Could not initialize stats widget: {e}")
 
@@ -1826,82 +2318,41 @@ class DNSScannerTUI(App):
         self._log(f"[cyan]Concurrency: {self.concurrency} workers[/cyan]")
         await asyncio.sleep(0)
 
+        self._log("[cyan]DNS method: Standard UDP (port 53)[/cyan]")
+        await asyncio.sleep(0)
+
         self.notify("Scanning in real-time...", severity="information", timeout=3)
 
         # Create semaphore
         sem = asyncio.Semaphore(self.concurrency)
 
-        # Use memory-efficient streaming by default
+        # Windows Selector event loop caps socket monitoring at 64 — warn if over limit
+        import sys as _sys
+        if _sys.platform == "win32" and self.concurrency > 64:
+            self._log(
+                f"[yellow]⚠ Windows select() limit: effective concurrency capped at ~64 sockets "
+                f"(requested {self.concurrency}). Consider lowering concurrency for reliability.[/yellow]"
+            )
+
         self._log("[green]Starting memory-efficient streaming scan...[/green]")
         await asyncio.sleep(0)
 
-        chunk_size = 500  # Process 500 IPs at a time
-        active_tasks = []
-        chunk_num = 0
+        max_outstanding = self.concurrency * 2  # Cap outstanding tasks
+        active_tasks: set = set()
+        scan_complete = False
 
-        # Stream IPs efficiently without loading all into memory
-        async for ip_chunk in self._stream_ips_from_file():
-            # Check for shutdown
+        # Outer loop: restarts streaming when shuffle is signaled
+        while not scan_complete:
             if self._shutdown_event and self._shutdown_event.is_set():
                 break
 
-            # Check for pause
-            await self.pause_event.wait()
+            # Clear shuffle signal for this iteration
+            self.shuffle_signal.clear()
 
-            # After resume, if user shuffled, switch to shuffled mode
-            if self.remaining_ips:
-                self._log("[cyan]Switching to shuffled IP scanning mode...[/cyan]")
-                break  # Exit streaming loop to handle shuffled IPs below
+            shuffled = False
 
-            chunk_num += 1
-
-            # Create tasks for this chunk
-            for ip in ip_chunk:
-                task = asyncio.create_task(self._test_dns_with_callback(ip, sem))
-                active_tasks.append(task)
-
-            # Keep reference for cleanup
-            self.active_scan_tasks = active_tasks
-
-            # Process completed tasks periodically
-            if len(active_tasks) >= chunk_size:
-                # Check for pause before processing
-                await self.pause_event.wait()
-
-                # Check for shutdown
-                if self._shutdown_event and self._shutdown_event.is_set():
-                    break
-
-                # Wait for some tasks to complete
-                done, active_tasks = await asyncio.wait(
-                    active_tasks, return_when=asyncio.FIRST_COMPLETED
-                )
-
-                # Process completed results
-                for task in done:
-                    try:
-                        result = await task
-                        await self._process_result(result)
-                    except asyncio.CancelledError:
-                        pass  # Task was cancelled during shutdown
-                    except Exception as e:
-                        logger.error(
-                            f"Error processing DNS test result: {e}", exc_info=True
-                        )
-
-                active_tasks = list(active_tasks)
-                self.active_scan_tasks = active_tasks
-                await asyncio.sleep(0)  # Yield to UI
-
-        # Handle shuffled IPs if user shuffled during pause
-        if self.remaining_ips:
-            self._log(
-                f"[cyan]Scanning {len(self.remaining_ips)} shuffled IPs...[/cyan]"
-            )
-
-            # Process shuffled IPs in chunks
-            shuffled_index = 0
-            while shuffled_index < len(self.remaining_ips):
+            # Stream IPs efficiently without loading all into memory
+            async for ip_chunk in self._stream_ips_from_file():
                 # Check for shutdown
                 if self._shutdown_event and self._shutdown_event.is_set():
                     break
@@ -1909,57 +2360,116 @@ class DNSScannerTUI(App):
                 # Check for pause
                 await self.pause_event.wait()
 
-                # Get next chunk of shuffled IPs
-                chunk_end = min(shuffled_index + chunk_size, len(self.remaining_ips))
-                shuffled_chunk = self.remaining_ips[shuffled_index:chunk_end]
-                shuffled_index = chunk_end
+                # Check for shuffle signal - break to restart stream with new order
+                if self.shuffle_signal.is_set():
+                    shuffled = True
+                    self._log("[cyan]Reshuffling IP stream order...[/cyan]")
+                    break
 
-                # Create tasks for this shuffled chunk
-                for ip in shuffled_chunk:
-                    # remaining_ips already contains only untested IPs
+                # Create tasks for this chunk
+                for ip in ip_chunk:
+                    # Stop creating tasks if preset limit reached
+                    if self._shutdown_event and self._shutdown_event.is_set():
+                        break
                     task = asyncio.create_task(self._test_dns_with_callback(ip, sem))
-                    active_tasks.append(task)
+                    active_tasks.add(task)
 
-                # Process completed tasks
-                if len(active_tasks) >= chunk_size or shuffled_index >= len(
-                    self.remaining_ips
-                ):
+                # Keep reference for cleanup
+                self.active_scan_tasks = active_tasks
+
+                # Process completed tasks - keep outstanding tasks capped
+                while len(active_tasks) >= max_outstanding:
+                    # Check for pause before processing
                     await self.pause_event.wait()
 
+                    # Check for shutdown
                     if self._shutdown_event and self._shutdown_event.is_set():
                         break
 
-                    done, active_tasks = await asyncio.wait(
-                        active_tasks, return_when=asyncio.FIRST_COMPLETED
+                    # Check for shuffle signal during processing
+                    if self.shuffle_signal.is_set():
+                        shuffled = True
+                        self._log("[cyan]Reshuffling IP stream order...[/cyan]")
+                        break
+
+                    # Wait for some tasks to complete (timeout ensures UI stays responsive)
+                    done, pending = await asyncio.wait(
+                        active_tasks, return_when=asyncio.FIRST_COMPLETED, timeout=0.15
                     )
 
-                    for task in done:
+                    if not done:
+                        # Timeout - no tasks completed yet, just yield to UI
+                        await asyncio.sleep(0)
+                        continue
+
+                    # Process completed results in small batches to prevent UI freeze
+                    done_list = list(done)
+                    batch_size = 5  # Process max 5 results before yielding to UI for better responsiveness
+                    for i, task in enumerate(done_list):
                         try:
                             result = await task
                             await self._process_result(result)
                         except asyncio.CancelledError:
-                            pass  # Task was cancelled during shuffle transition
+                            pass
                         except Exception as e:
                             logger.error(
-                                f"Error processing shuffled IP result: {e}",
-                                exc_info=True,
+                                f"Error processing DNS test result: {e}", exc_info=True
                             )
+                        
+                        # Yield to UI every batch_size results to keep UI responsive
+                        if (i + 1) % batch_size == 0:
+                            await asyncio.sleep(0)
 
-                    active_tasks = list(active_tasks)
-                    await asyncio.sleep(0)
+                    active_tasks = pending  # pending is already a set
+                    self.active_scan_tasks = active_tasks
 
-        # Clear shuffled IPs from memory after processing for better memory management
-        if self.remaining_ips:
-            shuffled_count = len(self.remaining_ips)
-            self.remaining_ips.clear()  # Free memory
-            gc.collect()  # Force garbage collection
-            self._log(
-                f"[dim]Cleared {shuffled_count} shuffled IPs from memory (GC triggered)[/dim]"
-            )
+                # Break out of async for if shuffle/shutdown detected in processing
+                if shuffled or (self._shutdown_event and self._shutdown_event.is_set()):
+                    break
+
+            # Check if shuffle was signaled but stream ended before we caught it
+            if not shuffled and self.shuffle_signal.is_set():
+                shuffled = True
+                self._log("[cyan]Reshuffling IP stream order (post-stream)...[/cyan]")
+
+            if not shuffled:
+                # Stream completed normally (no shuffle interrupt)
+                scan_complete = True
+            else:
+                # Shuffle was requested - drain active tasks quickly then restart stream
+                if active_tasks:
+                    self._log(f"[dim]Draining {len(active_tasks)} active tasks before reshuffle...[/dim]")
+                    done, pending = await asyncio.wait(active_tasks, timeout=5.0)
+                    # Process in batches to prevent UI freeze
+                    done_list = list(done)
+                    for i, task in enumerate(done_list):
+                        try:
+                            result = await task
+                            await self._process_result(result)
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                        # Yield every 5 results for better responsiveness
+                        if (i + 1) % 5 == 0:
+                            await asyncio.sleep(0)
+                    # Cancel remaining tasks that didn't finish in time
+                    for task in pending:
+                        task.cancel()
+                    active_tasks = set()
+                    self.active_scan_tasks = []
+
+                self._log(
+                    f"[cyan]Restarting stream (skipping {len(self.tested_subnets)} completed /24 blocks)[/cyan]"
+                )
+                gc.collect()
+                await asyncio.sleep(0)
 
         # Check if we're shutting down
         if self._shutdown_event and self._shutdown_event.is_set():
             self._log("[yellow]Scan interrupted - cleaning up...[/yellow]")
+            # Stop sort refresh timer
+            if hasattr(self, "_sort_refresh_timer") and self._sort_refresh_timer:
+                self._sort_refresh_timer.stop()
+                self._sort_refresh_timer = None
             # Cancel remaining tasks
             for task in active_tasks:
                 if not task.done():
@@ -1970,7 +2480,9 @@ class DNSScannerTUI(App):
         self._log("[cyan]Finishing remaining scans...[/cyan]")
         if active_tasks:
             done, _ = await asyncio.wait(active_tasks)
-            for task in done:
+            # Process in batches to prevent UI freeze
+            done_list = list(done)
+            for i, task in enumerate(done_list):
                 try:
                     result = await task
                     await self._process_result(result)
@@ -1980,6 +2492,9 @@ class DNSScannerTUI(App):
                     logger.error(
                         f"Error processing final task result: {e}", exc_info=True
                     )
+                # Yield every 5 results for better responsiveness
+                if (i + 1) % 5 == 0:
+                    await asyncio.sleep(0)
 
         self._log(
             f"[cyan]Scan complete. Scanned: {self.current_scanned}, Found: {len(self.found_servers)}[/cyan]"
@@ -1988,33 +2503,39 @@ class DNSScannerTUI(App):
             f"Scan complete. Scanned: {self.current_scanned}, Found: {len(self.found_servers)}"
         )
 
+        # Stop the periodic sort refresh timer
+        if hasattr(self, "_sort_refresh_timer") and self._sort_refresh_timer:
+            self._sort_refresh_timer.stop()
+            self._sort_refresh_timer = None
+
+        # Rebuild table at end to show final sorted results
+        self.table_needs_rebuild = True
+        self._rebuild_table()
+
         # Full garbage collection after scan completes
         gc.collect()
 
         # Update final statistics
         try:
-            stats = self.query_one("#stats", StatsWidget)
-            stats.scanned = self.current_scanned
-            stats.found = len(self.found_servers)
-            stats.passed = len(
-                [ip for ip, r in self.proxy_results.items() if r == "Success"]
-            )
-            stats.failed = len(
-                [ip for ip, r in self.proxy_results.items() if r == "Failed"]
-            )
-            elapsed = time.time() - self.start_time
-            stats.elapsed = elapsed
-            stats.speed = self.current_scanned / elapsed if elapsed > 0 else 0
-            stats.total = self.current_scanned  # Set total to actual scanned count
+            stats = self._stats_widget
+            if stats is not None:
+                stats.scanned = self.current_scanned
+                stats.found = len(self.found_servers)
+                stats.passed = self._passed_count
+                stats.failed = self._failed_count
+                elapsed = time.time() - self.start_time
+                stats.elapsed = elapsed
+                stats.speed = self.current_scanned / elapsed if elapsed > 0 else 0
+                stats.total = self.current_scanned  # Set total to actual scanned count
 
-            progress_bar = self.query_one("#progress-bar", CustomProgressBar)
-            progress_bar.update_progress(
-                self.current_scanned, self.current_scanned
-            )  # Force 100%
+            pb = self._progress_bar_widget
+            if pb is not None:
+                pb.update_progress(self.current_scanned, self.current_scanned)  # Force 100%
         except Exception as e:
             logger.debug(f"Could not update final statistics: {e}")
 
         # Final table rebuild
+        self.table_needs_rebuild = True
         self._rebuild_table()
 
         # Wait for all pending slipstream tests to complete (with timeout)
@@ -2033,14 +2554,37 @@ class DNSScannerTUI(App):
                 self._log(
                     "[yellow]Timeout waiting for slipstream tests - continuing anyway[/yellow]"
                 )
+            self.table_needs_rebuild = True
             self._rebuild_table()  # Rebuild after all tests complete
             # Collect garbage after proxy tests complete
             gc.collect()
+
+        # Wait for extra test tasks to complete
+        if self.extra_test_tasks:
+            num_extra = len(self.extra_test_tasks)
+            self._log(
+                f"[cyan]Waiting for {num_extra} extra tests to complete (max 30s)...[/cyan]"
+            )
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self.extra_test_tasks, return_exceptions=True),
+                    timeout=30.0,
+                )
+            except asyncio.TimeoutError:
+                self._log("[yellow]Timeout waiting for extra tests[/yellow]")
+            self.table_needs_rebuild = True
+            self._rebuild_table()
 
         # Auto-save results
         self._auto_save_results()
 
         self.notify("Scan complete! Results auto-saved.", severity="information")
+
+        # Close shared HTTP client
+        try:
+            await self._http_client.aclose()
+        except Exception:
+            pass
 
     def _count_total_ips_fast(self, filepath: str) -> int:
         """Fast counting of total IPs in CIDR file without loading into memory.
@@ -2147,11 +2691,13 @@ class DNSScannerTUI(App):
     async def _stream_ips_from_file(self) -> AsyncGenerator[list[str], None]:
         """Stream IPs from CIDR file in chunks without loading everything into memory.
 
-        Memory-efficient streaming approach that only loads IPs into remaining_ips
-        when shuffle functionality is actually needed.
+        Memory-efficient streaming approach. Skips /24 blocks already in
+        self.tested_subnets so reshuffled streams don't re-scan completed blocks.
+        Each yielded chunk comes from a single /24 block which is marked as tested.
         """
         chunk = []
         chunk_size = 500  # Yield 500 IPs at a time
+        max_ips = self.preset_max_ips  # 0 = unlimited
         rng = secrets.SystemRandom()
 
         loop = asyncio.get_event_loop()
@@ -2172,42 +2718,82 @@ class DNSScannerTUI(App):
                                 ipaddress.NetmaskValueError,
                                 ValueError,
                             ):
-                                # Invalid CIDR - skip it silently (common in user-provided files)
                                 pass
             except (OSError, IOError) as e:
                 logger.error(f"Failed to read subnet file: {e}")
             return subnets
 
-        # Read subnets
+        # Read subnets (small list, not individual IPs)
         subnets = await loop.run_in_executor(None, read_and_process)
         rng.shuffle(subnets)
 
         # Generate IPs from subnets - stream them efficiently
         for net in subnets:
+            # Stop streaming if shutdown was requested (preset limit reached)
+            if self._shutdown_event and self._shutdown_event.is_set():
+                break
+
             # Split into /24 chunks
             if net.prefixlen >= 24:
-                chunks = [net]
+                chunks_24 = [net]
             else:
-                chunks = list(net.subnets(new_prefix=24))
+                chunks_24 = list(net.subnets(new_prefix=24))
 
-            rng.shuffle(chunks)
+            rng.shuffle(chunks_24)
 
-            for subnet_chunk in chunks:
+            for subnet_chunk in chunks_24:
+                # Skip already-tested /24 blocks (from previous shuffle iterations)
+                subnet_key = str(subnet_chunk.network_address)
+                if subnet_key in self.tested_subnets:
+                    continue
+
+                # Generate IPs for this /24
                 if subnet_chunk.num_addresses == 1:
-                    ip_str = str(subnet_chunk.network_address)
-                    chunk.append(ip_str)
+                    chunk.append(str(subnet_chunk.network_address))
+                    self.total_ips_yielded += 1
                 else:
-                    ips = list(subnet_chunk.hosts())
-                    rng.shuffle(ips)
-                    for ip in ips:
-                        ip_str = str(ip)
-                        chunk.append(ip_str)
+                    # Integer-range shuffle — no IPv4Address object allocation per host
+                    net_int = int(subnet_chunk.network_address)
+                    if subnet_chunk.prefixlen >= 31:
+                        # /31: both addresses are valid hosts; /32 is handled above
+                        addr_count = subnet_chunk.num_addresses
+                        indices = list(range(addr_count))
+                        rng.shuffle(indices)
+                        for idx in indices:
+                            chunk.append(str(ipaddress.IPv4Address(net_int + idx)))
+                            self.total_ips_yielded += 1
+                            if max_ips > 0 and self.total_ips_yielded >= max_ips:
+                                break
+                    else:
+                        host_count = subnet_chunk.num_addresses - 2  # exclude network + broadcast
+                        start_int = net_int + 1
+                        for idx in rng.sample(range(host_count), host_count):
+                            chunk.append(str(ipaddress.IPv4Address(start_int + idx)))
+                            self.total_ips_yielded += 1
+                            # Stop generating if preset limit reached
+                            if max_ips > 0 and self.total_ips_yielded >= max_ips:
+                                break
 
-                        # Yield chunk when it reaches size
-                        if len(chunk) >= chunk_size:
-                            yield chunk
-                            chunk = []
-                            await asyncio.sleep(0)  # Yield to event loop
+                # Mark this /24 as tested
+                self.tested_subnets.add(subnet_key)
+
+                # Yield chunk when it reaches size
+                if len(chunk) >= chunk_size:
+                    yield chunk
+                    chunk = []
+                    await asyncio.sleep(0)  # Yield to event loop
+
+                # Stop streaming if preset limit reached
+                if max_ips > 0 and self.total_ips_yielded >= max_ips:
+                    if chunk:
+                        yield chunk
+                    return
+
+            # Check preset limit at subnet level too
+            if max_ips > 0 and self.total_ips_yielded >= max_ips:
+                if chunk:
+                    yield chunk
+                return
 
         # Yield remaining IPs
         if chunk:
@@ -2230,6 +2816,9 @@ class DNSScannerTUI(App):
             self.current_scanned += 1
 
             if is_valid:
+                # Reset auto-shuffle counter when DNS found
+                self.ips_since_last_found = 0
+
                 # Add to found servers and table immediately
                 self._add_result(ip, response_time)
                 self._log(
@@ -2243,32 +2832,83 @@ class DNSScannerTUI(App):
                     self.slipstream_tasks.add(task)
                     task.add_done_callback(self.slipstream_tasks.discard)
 
-            # Update UI periodically
-            if self.current_scanned % 10 == 0:
-                current_time = time.time()
+                # Queue extra tests if enabled (non-blocking)
+                self._queue_extra_tests(ip)
+            else:
+                # Increment counter for auto-shuffle logic
+                self.ips_since_last_found += 1
+
+                # Auto-shuffle logic for presets - instant, no pause needed
+                if (
+                    self.preset_auto_shuffle
+                    and self.preset_shuffle_threshold > 0
+                    and self.ips_since_last_found >= self.preset_shuffle_threshold
+                    and not self.is_paused
+                ):
+                    # For fast preset: also check proxy pass if proxy test is on
+                    should_shuffle = True
+                    if self.scan_preset == "fast" and self.test_slipstream:
+                        if self._passed_count > self.auto_shuffle_count:
+                            should_shuffle = False
+
+                    # For full preset: skip shuffle if ANY DNS was found in this cycle
+                    if self.scan_preset == "full" and len(self.found_servers) > self.auto_shuffle_count:
+                        should_shuffle = False
+                        self.auto_shuffle_count = len(self.found_servers)
+
+                    if should_shuffle:
+                        self.auto_shuffle_count += 1
+                        self.ips_since_last_found = 0
+                        self._log(
+                            f"[yellow]Auto-shuffle ({self.scan_preset}): "
+                            f"No DNS in {self.preset_shuffle_threshold} IPs[/yellow]"
+                        )
+                        # Signal instant reshuffle - no pause needed
+                        if self.shuffle_signal:
+                            self.shuffle_signal.set()
+
+            # Check preset max IPs limit (fast and deep) - outside if/else so it always fires
+            if (
+                self.preset_max_ips > 0
+                and self.current_scanned >= self.preset_max_ips
+            ):
+                self._log(
+                    f"[yellow]{self.scan_preset.title()} scan limit reached ({self.preset_max_ips} IPs). Stopping.[/yellow]"
+                )
+                if self._shutdown_event:
+                    self._shutdown_event.set()
+
+            # Update UI periodically with time-based throttling to prevent UI freeze
+            current_time = time.time()
+            # Update every 10 IPs OR every 0.1 seconds, whichever comes first
+            should_update = (
+                self.current_scanned % 10 == 0 or
+                (current_time - self.last_update_time) >= 0.1
+            )
+
+            if should_update:
                 elapsed = current_time - self.start_time
+                self.last_update_time = current_time
 
                 try:
-                    stats = self.query_one("#stats", StatsWidget)
-                    stats.scanned = self.current_scanned
-                    stats.elapsed = elapsed
-                    stats.speed = self.current_scanned / elapsed if elapsed > 0 else 0
-                    stats.found = len(self.found_servers)
-                    stats.passed = len(
-                        [ip for ip, r in self.proxy_results.items() if r == "Success"]
-                    )
-                    stats.failed = len(
-                        [ip for ip, r in self.proxy_results.items() if r == "Failed"]
-                    )
+                    stats = self._stats_widget
+                    if stats is not None:
+                        # Direct update (batch_update context manager not available on Static)
+                        stats.scanned = self.current_scanned
+                        stats.elapsed = elapsed
+                        stats.speed = self.current_scanned / elapsed if elapsed > 0 else 0
+                        stats.found = len(self.found_servers)
+                        stats.passed = self._passed_count
+                        stats.failed = self._failed_count
 
-                    progress_bar = self.query_one("#progress-bar", CustomProgressBar)
-                    progress_bar.update_progress(self.current_scanned, stats.total)
+                    pb = self._progress_bar_widget
+                    if pb is not None:
+                        pb.update_progress(self.current_scanned, stats.total if stats else 0)
                 except Exception as e:
                     logger.debug(f"Could not update stats during scan: {e}")
 
-                # Periodic garbage collection every 1000 scans to prevent memory buildup
-                if self.current_scanned % 1000 == 0:
-                    gc.collect(generation=0)  # Fast generation-0 collection
+            # Yield to UI event loop after each result to keep UI responsive
+            await asyncio.sleep(0)
 
     def _collect_ips(self, subnets: list[ipaddress.IPv4Network]) -> list[str]:
         """Collect all IPs from subnets in random order using CSPRNG."""
@@ -2312,7 +2952,7 @@ class DNSScannerTUI(App):
             try:
                 domain = self.domain
                 if self.random_subdomain:
-                    prefix = secrets.token_hex(4)
+                    prefix = random.randbytes(4).hex()
                     domain = f"{prefix}.{domain}"
 
                 # 2 second timeout for DNS servers
@@ -2324,13 +2964,14 @@ class DNSScannerTUI(App):
                     result = await resolver.query(domain, self.dns_type)
                     elapsed = time.time() - start
 
-                    # If we got a result and it's under 2000ms, it's a valid DNS server
-                    if result and elapsed < 2.0:
+                    # If we got a result (even empty list means valid server response) and it's under 2000ms
+                    # An empty list [] means "No records found" but the server DID respond successfully.
+                    if (result is not None) and elapsed < 2.0:
                         logger.debug(
                             f"{ip}: DNS responded - {type(result)} in {elapsed*1000:.0f}ms"
                         )
                         return (ip, True, elapsed)
-                    elif result:
+                    elif result is not None:
                         # Too slow, reject it
                         logger.debug(f"{ip}: DNS too slow - {elapsed*1000:.0f}ms")
                         return (ip, False, 0)
@@ -2368,123 +3009,152 @@ class DNSScannerTUI(App):
                 return (ip, False, 0)
 
     def _add_result(self, ip: str, response_time: float) -> None:
-        """Add a found server to results immediately, resort periodically."""
+        """Add a found server to the unified result table immediately."""
         self.found_servers.add(ip)
         self.server_times[ip] = response_time
 
-        # Add to table immediately for instant feedback
         try:
+            time_str = self._format_time(response_time)
+
+            # Build unified row
+            row = [ip, time_str]
+            if self.test_slipstream:
+                row.append(self._get_proxy_str(ip))
+            row.extend([
+                self._get_ipver_column(ip),
+                self._get_security_column(ip), self._get_tcp_udp_column(ip),
+                self._get_edns0_column(ip),
+                self._get_resolve_column(ip),
+                self._get_isp_column(ip),
+            ])
+
             table = self.query_one("#results-table", DataTable)
-
-            server_ms = response_time * 1000
-            if server_ms < 100:
-                server_time_str = f"[green]{server_ms:.0f}ms[/green]"
-            elif server_ms < 300:
-                server_time_str = f"[yellow]{server_ms:.0f}ms[/yellow]"
-            else:
-                server_time_str = f"[red]{server_ms:.0f}ms[/red]"
-
-            # Get proxy status
-            proxy_status = self.proxy_results.get(ip, "N/A")
-            if proxy_status == "Success":
-                proxy_str = "[green]✓ Passed[/green]"
-            elif proxy_status == "Failed":
-                proxy_str = "[red]✗ Failed[/red]"
-            elif proxy_status == "Testing":
-                proxy_str = "[yellow]Testing...[/yellow]"
-            elif proxy_status == "Pending":
-                proxy_str = "[dim]Queued[/dim]"
-            else:
-                proxy_str = "[dim]N/A[/dim]"
-
-            table.add_row(
-                ip,
-                server_time_str,
-                "[green]Active[/green]",
-                proxy_str,
-            )
+            table.add_row(*row, key=ip)
         except Exception as e:
             logger.debug(f"Could not add result row to table: {e}")
 
-        # Mark table for periodic resort
-        self.table_needs_rebuild = True
+    def _get_proxy_str(self, ip: str) -> str:
+        """Get formatted proxy status string."""
+        proxy_status = self.proxy_results.get(ip, "N/A")
+        if proxy_status == "Success":
+            return "[green]Passed[/green]"
+        elif proxy_status == "Failed":
+            return "[red]Failed[/red]"
+        elif proxy_status == "Testing":
+            return "[yellow]Testing...[/yellow]"
+        elif proxy_status == "Pending":
+            return "[dim]Queued[/dim]"
+        return "[dim]N/A[/dim]"
 
-        # Resort table every 2 seconds to maintain sorted order
-        current_time = time.time()
-        if current_time - self.last_table_update_time >= 2.0:
-            self._rebuild_table()
-            self.last_table_update_time = current_time
+    def _get_ipver_column(self, ip: str) -> str:
+        """Get IPv4/IPv6 support for table column."""
+        proto = self.protocol_results.get(ip, {})
+        if ip not in self.protocol_results:
+            return "[dim]Testing...[/dim]"
+        if proto.get("ipv6"):
+            return "[green]IPv4/IPv6[/green]"
+        return "[cyan]IPv4[/cyan]"
+
+    def _update_table_row(self, ip: str) -> None:
+        """Update individual cells in the table for the given IP (no rebuild)."""
+        try:
+            table = self.query_one("#results-table", DataTable)
+            if ip in table._row_locations:
+                if self.test_slipstream:
+                    table.update_cell(ip, "proxy", self._get_proxy_str(ip))
+                table.update_cell(ip, "ipver", self._get_ipver_column(ip))
+                table.update_cell(ip, "isp", self._get_isp_column(ip))
+                table.update_cell(ip, "security", self._get_security_column(ip))
+                table.update_cell(ip, "tcpudp", self._get_tcp_udp_column(ip))
+                table.update_cell(ip, "resolved", self._get_resolve_column(ip))
+                table.update_cell(ip, "edns0", self._get_edns0_column(ip))
+        except Exception as e:
+            logger.debug(f"Could not update table row for {ip}: {e}")
 
     def _rebuild_table(self) -> None:
-        """Rebuild the entire table with sorted results."""
+        """Rebuild unified table with default sort (finalized IPs first, sorted by ping)."""
         if not self.table_needs_rebuild:
             return
 
         try:
+            ips = list(self.server_times.keys())
+            finalized = [ip for ip in ips if self._is_ip_finalized(ip)]
+            testing = [ip for ip in ips if not self._is_ip_finalized(ip)]
+
+            # Sort: 1) proxy Success first (if enabled), 2) DNSSEC, 3) ping ascending
+            def _sort_key(ip):
+                proxy_rank = 0 if (self.test_slipstream and self.proxy_results.get(ip) == "Success") else (1 if self.test_slipstream else 0)
+                dnssec_rank = 0 if self.security_results.get(ip, {}).get("dnssec") else 1
+                return (proxy_rank, dnssec_rank, self.server_times.get(ip, 9999.0))
+            sorted_final = sorted(finalized, key=_sort_key)
+            sorted_testing = sorted(testing, key=_sort_key)
+
+            # Rebuild unified table
             table = self.query_one("#results-table", DataTable)
+            # Save scroll position before clearing
+            scroll_x = table.scroll_x
+            scroll_y = table.scroll_y
+            
+            table.clear(columns=True)
+            for label, key, width in self._get_table_columns():
+                table.add_column(label, key=key, width=width)
+            table.cursor_type = "row"
 
-            # Clear and rebuild table with smart sorting:
-            # 1. Passed proxy tests (lowest ping first)
-            # 2. Testing status
-            # 3. Queued/Pending
-            # 4. N/A status
-            # 5. Failed tests (at the end)
-            table.clear()
+            for ip in sorted_final + sorted_testing:
+                row = [ip, self._format_time(self.server_times[ip])]
+                if self.test_slipstream:
+                    row.append(self._get_proxy_str(ip))
+                row.extend([
+                    self._get_ipver_column(ip),
+                    self._get_security_column(ip), self._get_tcp_udp_column(ip),
+                    self._get_edns0_column(ip),
+                    self._get_resolve_column(ip),
+                    self._get_isp_column(ip),
+                ])
+                table.add_row(*row, key=ip)
 
-            def sort_key(item):
-                server_ip, server_time = item
-                proxy_status = self.proxy_results.get(server_ip, "N/A")
-
-                # Priority order: Success=0, Testing=1, Pending=2, N/A=3, Failed=4
-                if proxy_status == "Success":
-                    priority = 0
-                elif proxy_status == "Testing":
-                    priority = 1
-                elif proxy_status == "Pending":
-                    priority = 2
-                elif proxy_status == "N/A":
-                    priority = 3
-                else:  # Failed
-                    priority = 4
-
-                # Sort by priority first, then by response time
-                return (priority, server_time)
-
-            # Show all servers including failed ones
-            sorted_servers = sorted(self.server_times.items(), key=sort_key)
-
-            for server_ip, server_time in sorted_servers:
-                server_ms = server_time * 1000
-                if server_ms < 100:
-                    server_time_str = f"[green]{server_ms:.0f}ms[/green]"
-                elif server_ms < 300:
-                    server_time_str = f"[yellow]{server_ms:.0f}ms[/yellow]"
-                else:
-                    server_time_str = f"[red]{server_ms:.0f}ms[/red]"
-
-                # Get proxy status
-                proxy_status = self.proxy_results.get(server_ip, "N/A")
-                if proxy_status == "Success":
-                    proxy_str = "[green]✓ Passed[/green]"
-                elif proxy_status == "Failed":
-                    proxy_str = "[red]✗ Failed[/red]"
-                elif proxy_status == "Testing":
-                    proxy_str = "[yellow]Testing...[/yellow]"
-                elif proxy_status == "Pending":
-                    proxy_str = "[dim]Queued[/dim]"
-                else:
-                    proxy_str = "[dim]N/A[/dim]"
-
-                table.add_row(
-                    server_ip,
-                    server_time_str,
-                    "[green]Active[/green]",
-                    proxy_str,
-                )
+            # Restore scroll position
+            table.scroll_x = scroll_x
+            table.scroll_y = scroll_y
 
             self.table_needs_rebuild = False
         except Exception as e:
             logger.debug(f"Could not rebuild results table: {e}")
+
+    def _is_ip_finalized(self, ip: str) -> bool:
+        """Check if all enabled extra tests have completed for this IP."""
+        # TCP/UDP is always tested for found servers
+        if ip not in self.tcp_udp_results:
+            return False
+        if self.security_test_enabled and ip not in self.security_results:
+            return False
+        if self.isp_info_enabled and ip not in self.isp_results:
+            return False
+        proto = self.protocol_results.get(ip, {})
+        if self.ipv6_test_enabled and "ipv6" not in proto:
+            return False
+        if ip not in self.resolve_results:
+            return False
+        if self.edns0_test_enabled and "edns0" not in proto:
+            return False
+        if self.test_slipstream and self.proxy_results.get(ip) in ("Pending", "Testing"):
+            return False
+        return True
+
+    def _periodic_sort_refresh(self) -> None:
+        """Periodically rebuild tables to maintain sort order during active scan."""
+        if self.found_servers and not self.is_paused:
+            self.table_needs_rebuild = True
+            self._rebuild_table()
+
+    def _format_time(self, response_time: float) -> str:
+        """Format response time with color."""
+        ms = response_time * 1000
+        if ms < 100:
+            return f"[green]{ms:.0f}ms[/green]"
+        elif ms < 300:
+            return f"[yellow]{ms:.0f}ms[/yellow]"
+        return f"[red]{ms:.0f}ms[/red]"
 
     async def _queue_slipstream_test(self, dns_ip: str) -> None:
         """Queue and run slipstream test with semaphore for max concurrent tests."""
@@ -2505,25 +3175,16 @@ class DNSScannerTUI(App):
                 result = await self._test_slipstream_proxy(dns_ip, port)
                 self.proxy_results[dns_ip] = result
 
-                # Update stats
+                # Update pass/fail counters and stats
+                if result == "Success":
+                    self._passed_count += 1
+                elif result == "Failed":
+                    self._failed_count += 1
                 try:
-                    stats = self.query_one("#stats", StatsWidget)
-                    if result == "Success":
-                        stats.passed = len(
-                            [
-                                ip
-                                for ip, r in self.proxy_results.items()
-                                if r == "Success"
-                            ]
-                        )
-                    else:
-                        stats.failed = len(
-                            [
-                                ip
-                                for ip, r in self.proxy_results.items()
-                                if r == "Failed"
-                            ]
-                        )
+                    stats = self._stats_widget
+                    if stats is not None:
+                        stats.passed = self._passed_count
+                        stats.failed = self._failed_count
                 except Exception as e:
                     logger.debug(f"Could not update stats after proxy test: {e}")
 
@@ -2534,9 +3195,7 @@ class DNSScannerTUI(App):
                         self._play_bell_sound()
                 else:
                     self._log(f"[red]✗ Proxy test FAILED: {dns_ip}[/red]")
-                    # Keep failed in list but at the end (handled by sort_key in _rebuild_table)
-                    self.table_needs_rebuild = True
-                    self._rebuild_table()
+                    self.table_needs_rebuild = True  # Will rebuild on pause/completion
 
                 self._update_table_row(dns_ip)  # Update UI with final result
 
@@ -2544,10 +3203,6 @@ class DNSScannerTUI(App):
                 # Return port to pool
                 self.available_ports.append(port)
 
-    def _update_table_row(self, ip: str) -> None:
-        """Update a single row in the table for the given IP."""
-        self.table_needs_rebuild = True
-        self._rebuild_table()
 
     async def _test_slipstream_proxy(self, dns_ip: str, port: int) -> str:
         """Test DNS server using slipstream proxy on a specific port.
@@ -2560,6 +3215,7 @@ class DNSScannerTUI(App):
             "Success" if proxy works, "Failed" otherwise
         """
         process = None
+        self._log(f"[dim]Starting proxy test for {dns_ip} on port {port}…[/dim]")
         try:
             # Build slipstream command with dynamic port using the manager
             cmd = self.slipstream_manager.get_run_command(
@@ -2569,199 +3225,113 @@ class DNSScannerTUI(App):
             logger.info(f"[{dns_ip}] Starting slipstream on port {port}")
             logger.debug(f"[{dns_ip}] Command: {' '.join(cmd)}")
 
-            # Start slipstream process
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                creationflags=(
-                    subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-                ),
+            # asyncio.create_subprocess_exec is NOT supported on Windows with
+            # WindowsSelectorEventLoopPolicy (required by aiodns).  Run the
+            # blocking Popen + stdout-read in a thread instead.
+            process, connection_ready, output_lines = await asyncio.to_thread(
+                _run_slipstream_sync, cmd, 15.0
             )
 
-            logger.debug(f"[{dns_ip}] Process started with PID {process.pid}")
+            logger.debug(f"[{dns_ip}] Slipstream thread returned, PID={process.pid}, "
+                         f"connection_ready={connection_ready}, lines={len(output_lines)}")
+
+            # Surface output lines to TUI log and file logger
+            for line in output_lines:
+                logger.debug(f"[{dns_ip}] Slipstream: {line}")
+                if "Listening on TCP port" in line:
+                    self._log(f"[dim]{dns_ip}: {markup_escape(line)}[/dim]")
+                elif "WARN" in line or "ERR" in line:
+                    self._log(f"[yellow]{dns_ip}: {markup_escape(line)}[/yellow]")
 
             # Track process for cleanup on quit
             self.slipstream_processes.append(process)
 
-            # Wait for "Connection ready" message (15 second timeout)
-            connection_ready = False
-            try:
-
-                async def wait_for_connection_ready():
-                    nonlocal connection_ready
-                    line_count = 0
-                    while True:
-                        line = await process.stdout.readline()
-                        if not line:
-                            logger.warning(
-                                f"[{dns_ip}] Slipstream process ended without output"
-                            )
-                            break
-
-                        line_str = line.decode("utf-8", errors="ignore").strip()
-                        line_count += 1
-
-                        # Log every line from slipstream for debugging
-                        logger.debug(
-                            f"[{dns_ip}] Slipstream output #{line_count}: {line_str}"
-                        )
-
-                        if "Connection ready" in line_str:
-                            connection_ready = True
-                            logger.info(
-                                f"[{dns_ip}] Connection ready detected on port {port}"
-                            )
-                            self._log(
-                                f"[cyan]{dns_ip}: Connection ready on port {port}[/cyan]"
-                            )
-                            return
-
-                await asyncio.wait_for(wait_for_connection_ready(), timeout=15)
-            except asyncio.TimeoutError:
-                logger.warning(f"[{dns_ip}] Slipstream connection timeout after 15s")
-                self._log(
-                    f"[yellow]{dns_ip}: Slipstream connection timeout (15s)[/yellow]"
-                )
-                return "Failed"
-
             if not connection_ready:
-                logger.error(f"[{dns_ip}] Connection not ready after waiting")
+                if not output_lines:
+                    logger.warning(f"[{dns_ip}] Slipstream produced no output")
+                    self._log(f"[red]{dns_ip}: slipstream produced no output (crashed?)[/red]")
+                else:
+                    logger.warning(f"[{dns_ip}] Slipstream connection timeout after 15s")
+                    self._log(
+                        f"[yellow]{dns_ip}: No tunnel established via this DNS (15s timeout)[/yellow]"
+                    )
                 return "Failed"
+
+            logger.info(f"[{dns_ip}] Connection ready detected on port {port}")
+            self._log(f"[cyan]{dns_ip}: Connection ready on port {port}[/cyan]")
 
             # Give slipstream a moment to fully initialize the proxy listener
             # This prevents race conditions where "Connection ready" is printed
             # but the proxy isn't quite ready to accept connections yet
-            logger.debug(f"[{dns_ip}] Waiting 1.5s for proxy to fully initialize")
-            await asyncio.sleep(1.5)
+            logger.debug(f"[{dns_ip}] Waiting 2.5s for proxy to fully initialize")
+            await asyncio.sleep(2.5)
 
-            # Test the proxy with google.com using dynamic port
-            # Mid-high timeout (15 seconds) as requested
-            # Build proxy URL with optional authentication
+            test_success = False
+
+            # Build SOCKS5 URL too (for independent parallel attempt)
             if self.proxy_auth_enabled and self.proxy_username:
                 from urllib.parse import quote
-
                 encoded_user = quote(self.proxy_username, safe="")
                 encoded_pass = quote(self.proxy_password, safe="")
                 proxy_url = f"http://{encoded_user}:{encoded_pass}@127.0.0.1:{port}"
                 proxy_url_log = f"http://{self.proxy_username}:****@127.0.0.1:{port}"
+                socks5_url = f"socks5://{encoded_user}:{encoded_pass}@127.0.0.1:{port}"
+                socks5_url_log = f"socks5://{self.proxy_username}:****@127.0.0.1:{port}"
             else:
                 proxy_url = f"http://127.0.0.1:{port}"
                 proxy_url_log = proxy_url
-            test_success = False
+                socks5_url = f"socks5://127.0.0.1:{port}"
+                socks5_url_log = socks5_url
 
-            # Try HTTP proxy first
-            logger.info(f"[{dns_ip}] Testing HTTP proxy at {proxy_url_log}")
+            # Use HTTPS (CONNECT tunnel) — slipstream is a tunnel proxy, not a plain-HTTP forwarder.
+            # CONNECT is universally supported; plain HTTP forwarding often isn't.
+            TEST_URL = "https://www.google.com"
+
+            # Try HTTP proxy (via CONNECT tunnel)
+            logger.info(f"[{dns_ip}] Testing HTTP proxy (CONNECT) at {proxy_url_log}")
             try:
-                logger.debug(
-                    f"[{dns_ip}] Creating HTTP client with proxy={proxy_url}, timeout=15.0"
-                )
                 async with httpx.AsyncClient(
                     proxy=proxy_url,
-                    timeout=15.0,  # Mid-high timeout
+                    timeout=15.0,
                     follow_redirects=True,
+                    verify=False,
                 ) as client:
-                    logger.debug(
-                        f"[{dns_ip}] Sending HTTP GET to http://google.com via proxy"
-                    )
                     start_time = time.time()
-                    response = await client.get("http://google.com")
+                    response = await client.get(TEST_URL)
                     elapsed = time.time() - start_time
-
-                    # Log detailed response information
-                    logger.debug(f"[{dns_ip}] HTTP response received in {elapsed:.2f}s")
-                    logger.debug(
-                        f"[{dns_ip}] HTTP response status: {response.status_code}"
-                    )
-                    logger.debug(
-                        f"[{dns_ip}] HTTP response headers: {dict(response.headers)}"
-                    )
-                    logger.debug(f"[{dns_ip}] HTTP response URL: {response.url}")
-                    logger.debug(
-                        f"[{dns_ip}] HTTP response body preview: {response.text[:200]}"
-                    )
-
-                    if response.status_code in (200, 301, 302):
+                    logger.debug(f"[{dns_ip}] HTTP proxy status={response.status_code} in {elapsed:.2f}s")
+                    if response.status_code in (200, 301, 302, 307, 308):
                         test_success = True
-                        logger.info(
-                            f"[{dns_ip}] HTTP proxy test PASSED (status {response.status_code}, {elapsed:.2f}s)"
-                        )
-                        self._log(
-                            f"[green]{dns_ip}: HTTP proxy test passed (status {response.status_code})[/green]"
-                        )
+                        logger.info(f"[{dns_ip}] HTTP proxy test PASSED (status {response.status_code}, {elapsed:.2f}s)")
+                        self._log(f"[green]{dns_ip}: HTTP proxy test passed (status {response.status_code})[/green]")
                     else:
-                        logger.warning(
-                            f"[{dns_ip}] HTTP proxy unexpected status code: {response.status_code}"
-                        )
+                        logger.warning(f"[{dns_ip}] HTTP proxy unexpected status: {response.status_code}")
             except Exception as http_err:
-                logger.warning(
-                    f"[{dns_ip}] HTTP proxy test failed: {type(http_err).__name__}: {str(http_err)}"
-                )
-                logger.debug(f"[{dns_ip}] HTTP error details:", exc_info=True)
+                logger.warning(f"[{dns_ip}] HTTP proxy test failed: {type(http_err).__name__}: {http_err}")
 
-                # Try SOCKS5 proxy with optional authentication
-                if self.proxy_auth_enabled and self.proxy_username:
-                    socks5_url = (
-                        f"socks5://{encoded_user}:{encoded_pass}@127.0.0.1:{port}"
-                    )
-                    socks5_url_log = (
-                        f"socks5://{self.proxy_username}:****@127.0.0.1:{port}"
-                    )
-                else:
-                    socks5_url = f"socks5://127.0.0.1:{port}"
-                    socks5_url_log = socks5_url
+            # Try SOCKS5 proxy independently (not just as fallback)
+            if not test_success:
                 logger.info(f"[{dns_ip}] Testing SOCKS5 proxy at {socks5_url_log}")
                 try:
-                    logger.debug(
-                        f"[{dns_ip}] Creating SOCKS5 client with proxy={socks5_url_log}, timeout=15.0"
-                    )
                     async with httpx.AsyncClient(
                         proxy=socks5_url,
-                        timeout=15.0,  # Mid-high timeout
+                        timeout=15.0,
                         follow_redirects=True,
+                        verify=False,
                     ) as client:
-                        logger.debug(
-                            f"[{dns_ip}] Sending HTTP GET to http://google.com via SOCKS5"
-                        )
                         start_time = time.time()
-                        response = await client.get("http://google.com")
+                        response = await client.get(TEST_URL)
                         elapsed = time.time() - start_time
-
-                        # Log detailed response information
-                        logger.debug(
-                            f"[{dns_ip}] SOCKS5 response received in {elapsed:.2f}s"
-                        )
-                        logger.debug(
-                            f"[{dns_ip}] SOCKS5 response status: {response.status_code}"
-                        )
-                        logger.debug(
-                            f"[{dns_ip}] SOCKS5 response headers: {dict(response.headers)}"
-                        )
-                        logger.debug(f"[{dns_ip}] SOCKS5 response URL: {response.url}")
-                        logger.debug(
-                            f"[{dns_ip}] SOCKS5 response body preview: {response.text[:200]}"
-                        )
-
-                        if response.status_code in (200, 301, 302):
+                        logger.debug(f"[{dns_ip}] SOCKS5 proxy status={response.status_code} in {elapsed:.2f}s")
+                        if response.status_code in (200, 301, 302, 307, 308):
                             test_success = True
-                            logger.info(
-                                f"[{dns_ip}] SOCKS5 proxy test PASSED (status {response.status_code}, {elapsed:.2f}s)"
-                            )
-                            self._log(
-                                f"[green]{dns_ip}: SOCKS5 proxy test passed (status {response.status_code})[/green]"
-                            )
+                            logger.info(f"[{dns_ip}] SOCKS5 proxy test PASSED (status {response.status_code}, {elapsed:.2f}s)")
+                            self._log(f"[green]{dns_ip}: SOCKS5 proxy test passed (status {response.status_code})[/green]")
                         else:
-                            logger.warning(
-                                f"[{dns_ip}] SOCKS5 proxy unexpected status code: {response.status_code}"
-                            )
+                            logger.warning(f"[{dns_ip}] SOCKS5 proxy unexpected status: {response.status_code}")
                 except Exception as socks_err:
-                    logger.error(
-                        f"[{dns_ip}] SOCKS5 proxy test failed: {type(socks_err).__name__}: {str(socks_err)}"
-                    )
-                    logger.debug(f"[{dns_ip}] SOCKS5 error details:", exc_info=True)
-                    self._log(
-                        f"[red]{dns_ip}: Both HTTP and SOCKS5 proxy tests failed[/red]"
-                    )
+                    logger.error(f"[{dns_ip}] SOCKS5 proxy test failed: {type(socks_err).__name__}: {socks_err}")
+                    self._log(f"[red]{dns_ip}: Both HTTP and SOCKS5 proxy tests failed[/red]")
 
             final_result = "Success" if test_success else "Failed"
             logger.info(f"[{dns_ip}] Final result: {final_result}")
@@ -2772,164 +3342,442 @@ class DNSScannerTUI(App):
                 f"[{dns_ip}] Slipstream error: {type(e).__name__}: {str(e)}",
                 exc_info=True,
             )
-            self._log(f"[red]Slipstream error for {dns_ip}: {str(e)[:50]}[/red]")
+            self._log(f"[red]Slipstream error for {dns_ip}: {type(e).__name__}: {markup_escape(str(e))}[/red]")
             return "Failed"
         finally:
             # Always kill the slipstream process
             if process:
                 try:
                     process.kill()
-                    await process.wait()
+                    await asyncio.to_thread(process.wait)
                     # Remove from tracking list
                     if process in self.slipstream_processes:
                         self.slipstream_processes.remove(process)
                 except (ProcessLookupError, OSError) as e:
                     logger.debug(f"Process cleanup for {dns_ip}: {e}")
 
-    def _shuffle_remaining_ips(self) -> None:
-        """Shuffle the remaining untested IPs while preserving tested ones.
+    # ── Extra Test Methods ───────────────────────────────────────────────
 
-        Note: For large CIDR files, this will load remaining IPs into memory.
-        This is only done when shuffle is actually requested to maintain efficiency.
-        Uses temporary tested_ips tracking only during shuffle for memory efficiency.
-        """
-        if not self.is_paused:
-            self.notify("Can only shuffle when paused!", severity="warning")
-            return
+    def _queue_extra_tests(self, ip: str) -> None:
+        """Queue enabled extra tests for a found DNS server (rate-limited to 5 concurrent)."""
+        async def _run_extras(dns_ip: str) -> None:
+            # Use pre-initialized semaphore (set at scan start)
+            async with self.extra_test_semaphore:
+                tasks: list[asyncio.Task] = []
+                # Always test TCP/UDP support
+                tasks.append(asyncio.create_task(self._test_tcp_udp_support(dns_ip)))
 
-        # If remaining_ips is empty, we need to build it from untested IPs
-        if not self.remaining_ips:
-            self._log(
-                "[yellow]Loading remaining IPs for shuffle (this may use memory for large files)...[/yellow]"
+                if self.security_test_enabled:
+                    tasks.append(asyncio.create_task(self._test_security(dns_ip)))
+                if self.ipv6_test_enabled:
+                    tasks.append(asyncio.create_task(self._test_ipv6(dns_ip)))
+                tasks.append(asyncio.create_task(self._test_resolve(dns_ip)))
+                if self.edns0_test_enabled:
+                    tasks.append(asyncio.create_task(self._test_edns0(dns_ip)))
+                if self.isp_info_enabled:
+                    tasks.append(asyncio.create_task(self._test_isp_info(dns_ip)))
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                # Update table row after all extras finish
+                self._update_table_row(dns_ip)
+
+        task = asyncio.create_task(_run_extras(ip))
+        self.extra_test_tasks.add(task)
+        task.add_done_callback(self.extra_test_tasks.discard)
+
+    def _get_extra_summary(self, ip: str) -> str:
+        """Build a compact summary string for the Extra column."""
+        parts: list[str] = []
+        sec = self.security_results.get(ip)
+        if sec:
+            flags = []
+            if sec.get("dnssec"):
+                flags.append("[green]DNSSEC[/green]")
+            if sec.get("hijacked"):
+                flags.append("[red]Hijack[/red]")
+            if sec.get("open_resolver"):
+                flags.append("[yellow]Open[/yellow]")
+            if flags:
+                parts.extend(flags)
+
+        proto = self.protocol_results.get(ip, {})
+        if proto.get("ipv6"):
+            parts.append("[cyan]v6[/cyan]")
+        if proto.get("edns0"):
+            parts.append("[cyan]EDNS0[/cyan]")
+
+        isp = self.isp_results.get(ip)
+        if isp:
+            org = isp.get("org", "")
+            if org:
+                parts.append(f"[dim]{org}[/dim]")
+
+        if not parts:
+            return "[dim]…[/dim]"
+        return " ".join(parts)
+    
+    def _get_security_column(self, ip: str) -> str:
+        """Get security test results for table column."""
+        sec = self.security_results.get(ip)
+        if not sec:
+            return "[dim]…[/dim]"
+        
+        flags = []
+        if sec.get("dnssec"):
+            flags.append("[green]DNSSEC[/green]")
+        if sec.get("open_resolver"):
+            flags.append("[yellow]Open[/yellow]")
+        if sec.get("hijacked"):
+            flags.append("[red]Hijack[/red]")
+        
+        if not flags:
+            return "[green]Secure[/green]"
+        
+        # Format: "DNSSEC  Open" with spacing between items
+        return "  ".join(flags)
+    
+    def _get_ipv6_column(self, ip: str) -> str:
+        """Get IPv6 test result for table column."""
+        proto = self.protocol_results.get(ip, {})
+        if ip not in self.protocol_results:
+            return "[dim]…[/dim]"
+        return "[green]Yes[/green]" if proto.get("ipv6") else "[red]No[/red]"
+    
+    def _get_resolve_column(self, ip: str) -> str:
+        """Get resolved IP result for table column."""
+        if ip not in self.resolve_results:
+            return "[dim]…[/dim]"
+        result = self.resolve_results[ip]
+        if result == "-":
+            return "[dim]-[/dim]"
+        return f"[cyan]{result}[/cyan]"
+
+    def _get_edns0_column(self, ip: str) -> str:
+        """Get EDNS0 test result for table column."""
+        proto = self.protocol_results.get(ip, {})
+        if ip not in self.protocol_results:
+            return "[dim]…[/dim]"
+        return "[green]Yes[/green]" if proto.get("edns0") else "[red]No[/red]"
+    
+    def _get_isp_column(self, ip: str) -> str:
+        """Get ISP info for table column."""
+        if ip not in self.isp_results:
+            return "[dim]…[/dim]"  # Not yet tested
+        isp = self.isp_results[ip]
+        org = isp.get("org", "-") or "-"
+        if org == "-":
+            return "[dim]-[/dim]"
+        return f"[cyan]{org}[/cyan]"
+    
+    def _get_tcp_udp_column(self, ip: str) -> str:
+        """Get TCP/UDP support for table column."""
+        result = self.tcp_udp_results.get(ip)
+        if not result:
+            return "[dim]Testing…[/dim]"
+        if result == "TCP/UDP":
+            return "[green]TCP/UDP[/green]"
+        elif result == "TCP only":
+            return "[yellow]TCP only[/yellow]"
+        elif result == "UDP only":
+            return "[cyan]UDP only[/cyan]"
+        return "[dim]Unknown[/dim]"
+
+    async def _test_security(self, ip: str, resolver: "aiodns.DNSResolver | None" = None) -> None:
+        """Test DNS security: DNSSEC validation, hijacking, open resolver."""
+        result: dict = {"dnssec": False, "hijacked": False, "open_resolver": False}
+        try:
+            resolver = resolver or aiodns.DNSResolver(nameservers=[ip], timeout=3.0, tries=1)
+            nxdomain_test = f"nxdomain-{random.randbytes(6).hex()}.example.invalid"
+
+            # Run DNSSEC and hijack checks in parallel to reduce total wait time
+            async def _check_dnssec() -> bool:
+                try:
+                    return await asyncio.wait_for(self._check_dnssec_raw(ip), timeout=4.0)
+                except Exception:
+                    return False
+
+            async def _check_hijack() -> bool:
+                try:
+                    answer = await resolver.query(nxdomain_test, "A")
+                    return bool(answer)
+                except aiodns.error.DNSError:
+                    return False
+                except Exception:
+                    return False
+
+            dnssec_ok, hijacked = await asyncio.gather(
+                _check_dnssec(),
+                _check_hijack(),
             )
-            self.notify("Loading IPs for shuffle...", severity="information", timeout=3)
+            result["dnssec"] = dnssec_ok
+            result["hijacked"] = hijacked
+            # Open resolver: it answered our queries = it's open to us
+            result["open_resolver"] = True
 
-            # Temporarily build tested_ips set from found_servers for shuffle logic
-            # This is memory-intensive but only done when shuffle is requested
-            temp_tested_ips = set(
-                self.found_servers
-            )  # Only IPs that were found (much smaller set)
+        except Exception as e:
+            logger.debug(f"Security test error for {ip}: {e}")
+
+        self.security_results[ip] = result
+        if result["dnssec"]:
+            self._log(f"[cyan]🔒 {ip}: DNSSEC supported[/cyan]")
+        if result["hijacked"]:
+            self._log(f"[red]⚠ {ip}: DNS hijacking detected[/red]")
+
+    async def _check_dnssec_raw(self, ip: str) -> bool:
+        """Send a raw DNS query with DO (DNSSEC OK) flag to check DNSSEC support."""
+        # Build a minimal DNS query for example.com A record with EDNS0 DO flag
+        txn_id = secrets.token_bytes(2)
+        # Flags: RD=1 (recursion desired)
+        flags = b"\x01\x00"
+        # QDCOUNT=1, ANCOUNT=0, NSCOUNT=0, ARCOUNT=1 (for OPT)
+        counts = b"\x00\x01\x00\x00\x00\x00\x00\x01"
+        # Question: example.com A IN
+        qname = b"\x07example\x03com\x00"
+        qtype = b"\x00\x01"  # A
+        qclass = b"\x00\x01"  # IN
+        # OPT RR (EDNS0) with DO flag
+        # NAME=0x00 (root), TYPE=OPT(41), UDP_SIZE=4096, RCODE=0, VERSION=0, FLAGS=DO(0x8000), RDLEN=0
+        opt_rr = b"\x00\x00\x29\x10\x00\x00\x00\x80\x00\x00\x00"
+
+        query = txn_id + flags + counts + qname + qtype + qclass + opt_rr
+
+        loop = asyncio.get_event_loop()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setblocking(False)
+        sock.settimeout(0)
+
+        try:
+            await loop.sock_sendto(sock, query, (ip, 53))
+            data = await asyncio.wait_for(loop.sock_recv(sock, 4096), timeout=3.0)
+
+            if len(data) < 12:
+                return False
+
+            # Check AD (Authenticated Data) flag in response – bit 5 of byte 3
+            resp_flags = data[2:4]
+            ad_flag = (resp_flags[1] >> 5) & 1
+            # Also check if response contains OPT record with DO flag
+            # Simple heuristic: if AD flag is set, DNSSEC is validated
+            if ad_flag:
+                return True
+
+            # Also look for OPT record in additional section with DO flag
+            # Check ARCOUNT > 0 and scan for TYPE=41
+            arcount = struct.unpack("!H", data[10:12])[0]
+            if arcount > 0:
+                # Simplified: search for OPT type (0x0029) in response
+                if b"\x00\x29" in data[12:]:
+                    return True
+
+            return False
+        except Exception:
+            return False
+        finally:
+            sock.close()
+
+    async def _test_ipv6(self, ip: str, resolver: "aiodns.DNSResolver | None" = None) -> None:
+        """Test if the DNS server handles AAAA (IPv6) queries."""
+        result = False
+        try:
+            resolver = resolver or aiodns.DNSResolver(nameservers=[ip], timeout=3.0, tries=1)
+            try:
+                answer = await resolver.query("google.com", "AAAA")
+                if answer:
+                    result = True
+            except aiodns.error.DNSError as e:
+                # NXDOMAIN / NODATA still means the server handles AAAA queries
+                code = e.args[0] if e.args else 0
+                if code in (1, 3, 4):
+                    result = True
+        except Exception as e:
+            logger.debug(f"IPv6 test error for {ip}: {e}")
+
+        self.protocol_results.setdefault(ip, {})["ipv6"] = result
+        if result:
+            self._log(f"[cyan]{ip}: IPv6 (AAAA) supported[/cyan]")
+
+    async def _test_resolve(self, ip: str, resolver: "aiodns.DNSResolver | None" = None) -> None:
+        """Resolve google.com via this DNS server and record the resulting IP."""
+        try:
+            resolver = resolver or aiodns.DNSResolver(nameservers=[ip], timeout=3.0, tries=1)
+            answer = await resolver.query("google.com", "A")
+            if answer:
+                ips = [r.host for r in answer]
+                resolved = ips[0] if len(ips) == 1 else ", ".join(ips[:2])
+                self.resolve_results[ip] = resolved
+                self._log(f"[cyan]{ip}: google.com → {resolved}[/cyan]")
+            else:
+                self.resolve_results[ip] = "-"
+        except Exception as e:
+            logger.debug(f"Resolve test error for {ip}: {e}")
+            self.resolve_results[ip] = "-"
+
+    async def _test_edns0(self, ip: str) -> None:
+        """Test EDNS0 support by sending OPT record and checking response."""
+        result = False
+        try:
+            # Build DNS query with EDNS0 OPT record
+            txn_id = secrets.token_bytes(2)
+            flags = b"\x01\x00"  # RD=1
+            # QDCOUNT=1, ANCOUNT=0, NSCOUNT=0, ARCOUNT=1 (OPT)
+            counts = b"\x00\x01\x00\x00\x00\x00\x00\x01"
+            qname = b"\x07example\x03com\x00"
+            qtype = b"\x00\x01"  # A
+            qclass = b"\x00\x01"  # IN
+            # OPT RR: NAME=root, TYPE=OPT(41), UDP=4096, RCODE_EXT=0, VERSION=0, FLAGS=0, RDLEN=0
+            opt_rr = b"\x00\x00\x29\x10\x00\x00\x00\x00\x00\x00\x00"
+
+            query = txn_id + flags + counts + qname + qtype + qclass + opt_rr
+
+            loop = asyncio.get_event_loop()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.setblocking(False)
 
             try:
-                # Re-read the file to get all IPs
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-                async def build_remaining():
-                    all_ips = []
-                    async for ip_chunk in self._stream_ips_from_file():
-                        all_ips.extend(ip_chunk)
-                    return [ip for ip in all_ips if ip not in temp_tested_ips]
-
-                self.remaining_ips = loop.run_until_complete(build_remaining())
-                loop.close()
-
-                # Clear temporary set to free memory
-                del temp_tested_ips
-
-            except (OSError, IOError) as e:
-                self._log(
-                    f"[red]Failed to load IPs for shuffle (file error): {e}[/red]"
+                await loop.sock_sendto(sock, query, (ip, 53))
+                data = await asyncio.wait_for(
+                    loop.sock_recv(sock, 4096), timeout=3.0
                 )
-                logger.error(f"Failed to load IPs for shuffle: {e}")
-                self.notify("Shuffle failed - unable to load IPs", severity="error")
-                return
-            except Exception as e:
-                self._log(f"[red]Failed to load IPs for shuffle: {e}[/red]")
-                logger.error(f"Unexpected error during shuffle: {e}", exc_info=True)
-                self.notify("Shuffle failed - unexpected error", severity="error")
-                return
 
-        untested_count = len(self.remaining_ips)
+                if len(data) >= 12:
+                    # Check ARCOUNT in response
+                    arcount = struct.unpack("!H", data[10:12])[0]
+                    if arcount > 0:
+                        # Look for OPT record type (41 = 0x0029) in response
+                        if b"\x00\x29" in data[12:]:
+                            result = True
+            finally:
+                sock.close()
 
-        if untested_count == 0:
-            self.notify("All IPs have been tested!", severity="information")
-            return
+        except Exception as e:
+            logger.debug(f"EDNS0 test error for {ip}: {e}")
 
-        # Warn about memory usage for large lists
-        if untested_count > 100000:  # > 100k IPs
+        self.protocol_results.setdefault(ip, {})["edns0"] = result
+        if result:
+            self._log(f"[cyan]{ip}: EDNS0 supported[/cyan]")
+
+    async def _test_isp_info(self, ip: str) -> None:
+        """Look up ISP/ASN/org information for the DNS server IP."""
+        info: dict = {"org": "-", "isp": "-", "asn": "", "country": ""}
+        try:
+            # Rate-limit ip-api.com: serialize access but release lock before sleeping
+            async with self._isp_rate_lock:
+                now = time.monotonic()
+                wait = 1.4 - (now - self._isp_last_request)  # ~43 req/min
+                self._isp_last_request = time.monotonic() + max(wait, 0)
+            # Sleep OUTSIDE the lock so other coroutines aren't blocked waiting
+            if wait > 0:
+                await asyncio.sleep(wait)
+
+            # Use ip-api.com (free, no key required, 45 req/min)
+            url = f"http://ip-api.com/json/{ip}?fields=as,org,isp,country,countryCode"
+            client = getattr(self, "_http_client", None)
+            owned = client is None
+            if owned:
+                client = httpx.AsyncClient(timeout=5.0)
+            try:
+                for attempt in range(2):
+                    resp = await client.get(url)
+                    if resp.status_code == 429:
+                        # Back off and retry once
+                        logger.warning(f"ip-api.com rate-limited for {ip}, retrying after 60s")
+                        await asyncio.sleep(60.0)
+                        continue
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        info = {
+                            "org": data.get("org", "") or "-",
+                            "isp": data.get("isp", "") or "-",
+                            "asn": data.get("as", ""),
+                            "country": data.get("countryCode", ""),
+                        }
+                    break
+            finally:
+                if owned:
+                    await client.aclose()
+        except Exception as e:
+            logger.debug(f"ISP info error for {ip}: {e}")
+
+        self.isp_results[ip] = info
+        if info.get("org"):
             self._log(
-                f"[yellow]Warning: Shuffling {untested_count} IPs may use significant memory[/yellow]"
+                f"[dim]{ip}: {info.get('org', '')} ({info.get('country', '')})[/dim]"
             )
 
-        # Shuffle the remaining untested IPs
-        rng = secrets.SystemRandom()
-        rng.shuffle(self.remaining_ips)
+    async def _test_tcp_udp_support(self, ip: str) -> None:
+        """Test if DNS server supports TCP, UDP, or both protocols."""
+        tcp_works = False
+        udp_works = False
+        
+        # UDP was already confirmed during main scan
+        udp_works = True
+        
+        # Test TCP (port 53)
+        try:
+            # Build DNS query
+            txn_id = secrets.token_bytes(2)
+            flags = b"\x01\x00"  # RD=1
+            counts = b"\x00\x01\x00\x00\x00\x00\x00\x00"  # QDCOUNT=1
+            qname = b"\x06google\x03com\x00"
+            qtype = b"\x00\x01"  # A
+            qclass = b"\x00\x01"  # IN
+            dns_msg = txn_id + flags + counts + qname + qtype + qclass
+            
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(ip, 53), timeout=2.0
+            )
+            try:
+                # Send length-prefixed DNS query
+                length_prefix = struct.pack("!H", len(dns_msg))
+                writer.write(length_prefix + dns_msg)
+                await writer.drain()
+                
+                # Read response
+                resp_len_bytes = await asyncio.wait_for(
+                    reader.readexactly(2), timeout=2.0
+                )
+                resp_len = struct.unpack("!H", resp_len_bytes)[0]
+                
+                if resp_len > 0:
+                    resp_data = await asyncio.wait_for(
+                        reader.readexactly(resp_len), timeout=2.0
+                    )
+                    # Valid DNS response
+                    if len(resp_data) >= 12 and resp_data[:2] == txn_id:
+                        tcp_works = True
+            finally:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug(f"TCP test error for {ip}: {e}")
+        
+        # Determine result
+        if tcp_works and udp_works:
+            result = "TCP/UDP"
+        elif tcp_works:
+            result = "TCP only"
+        elif udp_works:
+            result = "UDP only"
+        else:
+            result = "None"
+        
+        self.tcp_udp_results[ip] = result
+        logger.debug(f"{ip}: Protocol support = {result}")
 
-        # Force garbage collection after shuffle
-        gc.collect()
-
-        self._log(
-            f"[cyan]🔀 Shuffled {untested_count} untested IPs (optimized memory usage)[/cyan]"
-        )
-        self.notify(f"Shuffled {untested_count} untested IPs", severity="information")
+    def _shuffle_remaining_ips(self) -> None:
+        """Legacy shuffle method - now signals instant reshuffle."""
+        if self.shuffle_signal:
+            self.shuffle_signal.set()
+            self._log("[cyan]Shuffle signal sent - reshuffling stream...[/cyan]")
 
     async def _shuffle_remaining_ips_async(self) -> None:
-        """Async version of shuffle to avoid event loop conflicts."""
-        if not self.is_paused:
-            self.notify("Can only shuffle when paused!", severity="warning")
-            return
-
-        # If remaining_ips is empty, we need to build it from untested IPs
-        if not self.remaining_ips:
-            self._log(
-                "[yellow]Loading remaining IPs for shuffle (this may use memory for large files)...[/yellow]"
-            )
-            self.notify("Loading IPs for shuffle...", severity="information", timeout=3)
-
-            # Temporarily build tested_ips set from found_servers for shuffle logic
-            temp_tested_ips = set(self.found_servers)
-
-            try:
-                # Re-read the file to get all IPs using the existing async generator
-                all_ips = []
-                async for ip_chunk in self._stream_ips_from_file():
-                    all_ips.extend(ip_chunk)
-
-                # Filter out already found servers
-                self.remaining_ips = [ip for ip in all_ips if ip not in temp_tested_ips]
-
-                # Clear temporary set to free memory
-                del temp_tested_ips
-
-            except (OSError, IOError) as e:
-                self._log(
-                    f"[red]Failed to load IPs for shuffle (file error): {e}[/red]"
-                )
-                logger.error(f"Async shuffle failed to load IPs: {e}")
-                self.notify("Shuffle failed - unable to load IPs", severity="error")
-                return
-            except Exception as e:
-                self._log(f"[red]Failed to load IPs for shuffle: {e}[/red]")
-                logger.error(
-                    f"Unexpected error during async shuffle: {e}", exc_info=True
-                )
-                self.notify("Shuffle failed - unexpected error", severity="error")
-                return
-
-        untested_count = len(self.remaining_ips)
-
-        if untested_count == 0:
-            self.notify("All IPs have been tested!", severity="information")
-            return
-
-        # Warn about memory usage for large lists
-        if untested_count > 100000:
-            self._log(
-                f"[yellow]Warning: Shuffling {untested_count} IPs may use significant memory[/yellow]"
-            )
-
-        # Shuffle the remaining untested IPs
-        rng = secrets.SystemRandom()
-        rng.shuffle(self.remaining_ips)
-
-        # Force garbage collection after shuffle
-        gc.collect()
-
-        self._log(
-            f"[cyan]🔀 Shuffled {untested_count} untested IPs (optimized memory usage)[/cyan]"
-        )
-        self.notify(f"Shuffled {untested_count} untested IPs", severity="information")
+        """Async shuffle - signals instant reshuffle via shuffle_signal."""
+        if self.shuffle_signal:
+            self.shuffle_signal.set()
+            self._log("[cyan]Shuffle signal sent - reshuffling stream...[/cyan]")
 
     def _play_bell_sound(self) -> None:
         """Play a single coin/sparkle sound with error handling for systems without sound support."""
@@ -2977,9 +3825,9 @@ class DNSScannerTUI(App):
             logger.debug(f"Log widget not available: {e}")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Handle double-click on DNS row to copy IP to clipboard."""
+        """Handle double-click on DNS row to copy IP and show extra details."""
         try:
-            table = self.query_one("#results-table", DataTable)
+            table = event.data_table
             row_key = event.row_key
 
             # Check if row_key exists in table
@@ -2992,18 +3840,109 @@ class DNSScannerTUI(App):
                 # Extract IP - remove any Rich markup
                 ip_raw = str(row[0])
                 # Strip Rich tags if present
-                import re
-
                 ip = re.sub(r"\[.*?\]", "", ip_raw).strip()
 
                 if ip:
                     pyperclip.copy(ip)
                     self.notify(f"{ip} copied!", severity="information", timeout=2)
+
+                    # Show extra test details in log if available
+                    details: list[str] = []
+                    sec = self.security_results.get(ip)
+                    if sec:
+                        details.append(
+                            f"  Security: DNSSEC={'Yes' if sec.get('dnssec') else 'No'}, "
+                            f"Hijack={'Yes' if sec.get('hijacked') else 'No'}, "
+                            f"OpenResolver={'Yes' if sec.get('open_resolver') else 'No'}"
+                        )
+                    proto = self.protocol_results.get(ip, {})
+                    if proto:
+                        proto_items = [
+                            f"{k}={'Yes' if v else 'No'}" for k, v in proto.items()
+                        ]
+                        details.append(f"  Protocols: {', '.join(proto_items)}")
+                    isp = self.isp_results.get(ip)
+                    if isp and isp.get("org"):
+                        details.append(
+                            f"  ISP: {isp.get('org', '')} | AS: {isp.get('asn', '')} | "
+                            f"Country: {isp.get('country', '')}"
+                        )
+                    if details:
+                        self._log(f"[cyan]── Details for {ip} ──[/cyan]")
+                        for line in details:
+                            self._log(f"[dim]{line}[/dim]")
         except Exception as e:
             logger.debug(f"Row selection error: {e}")
 
+    def _build_csv_headers_and_rows(self, servers_to_save: dict) -> tuple[list[str], list[list[str]]]:
+        """Build CSV headers and row data based on enabled tests."""
+        headers = ["DNS", "Ping (ms)"]
+        if self.test_slipstream:
+            headers.append("Proxy Test")
+        headers.append("IPv4/IPv6")
+        # TCP/UDP is always tested
+        headers.append("TCP/UDP")
+        if self.security_test_enabled:
+            headers.append("Security")
+        if self.edns0_test_enabled:
+            headers.append("EDNS0")
+        headers.append("Resolved IP")
+        headers.append("ISP")
+
+        # Sort: 1) proxy Success first (if enabled), 2) DNSSEC, 3) ping ascending
+        def _csv_sort_key(item):
+            ip, t = item
+            proxy_rank = 0 if (self.test_slipstream and self.proxy_results.get(ip) == "Success") else (1 if self.test_slipstream else 0)
+            dnssec_rank = 0 if self.security_results.get(ip, {}).get("dnssec") else 1
+            return (proxy_rank, dnssec_rank, t)
+        sorted_servers = sorted(servers_to_save.items(), key=_csv_sort_key)
+
+        rows: list[list[str]] = []
+        for ip, resp_time in sorted_servers:
+            row = [ip, f"{resp_time * 1000:.0f}"]
+            if self.test_slipstream:
+                row.append(self.proxy_results.get(ip, "N/A"))
+            # IPv4/IPv6
+            proto = self.protocol_results.get(ip, {})
+            if proto.get("ipv6"):
+                row.append("IPv4/IPv6")
+            elif ip in self.protocol_results:
+                row.append("IPv4")
+            else:
+                row.append("")
+            # TCP/UDP
+            row.append(self.tcp_udp_results.get(ip, ""))
+            # Security
+            if self.security_test_enabled:
+                sec = self.security_results.get(ip, {})
+                if ip in self.security_results:
+                    flags = []
+                    if sec.get("dnssec"):
+                        flags.append("DNSSEC")
+                    if sec.get("open_resolver"):
+                        flags.append("Open Resolver")
+                    if sec.get("hijacked"):
+                        flags.append("Hijacked")
+                    row.append(", ".join(flags) if flags else "Secure")
+                else:
+                    row.append("")
+            # EDNS0
+            if self.edns0_test_enabled:
+                if ip in self.protocol_results and "edns0" in self.protocol_results[ip]:
+                    row.append("Yes" if proto.get("edns0") else "No")
+                else:
+                    row.append("")
+            # Resolved IP
+            row.append(self.resolve_results.get(ip, ""))
+            # ISP (rightmost column)
+            isp = self.isp_results.get(ip, {})
+            org = isp.get("org", "") or ""
+            row.append(org if org != "-" else "")
+            rows.append(row)
+        return headers, rows
+
     def _auto_save_results(self) -> None:
-        """Auto-save results at end of scan.
+        """Auto-save results as CSV at end of scan.
 
         When slipstream testing is enabled, only save DNS servers that passed the proxy test.
         """
@@ -3048,31 +3987,23 @@ class DNSScannerTUI(App):
             logger.error(f"Failed to create results directory: {e}")
             return
 
-        # Save TXT with datetime filename
-        txt_file = output_dir / f"{timestamp}.txt"
-
-        # Sort by response time for output
-        sorted_servers = sorted(servers_to_save.items(), key=lambda x: x[1])
+        csv_file = output_dir / f"{timestamp}.csv"
+        headers, rows = self._build_csv_headers_and_rows(servers_to_save)
 
         try:
-            with open(txt_file, "w", encoding="utf-8") as f:
-                f.write(f"# PYDNS Scanner Results - {timestamp}\n")
-                f.write(f"# Domain: {self.domain} | Type: {self.dns_type}\n")
-                if self.test_slipstream:
-                    f.write("# Slipstream Test: ENABLED (only passed servers)\n")
-                f.write(f"# Total Saved: {len(servers_to_save)}\n")
-                f.write("#" + "=" * 50 + "\n\n")
-                for server_ip, server_time in sorted_servers:
-                    f.write(f"{server_ip}\n")
+            with open(csv_file, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                writer.writerows(rows)
 
-            self._log(f"[green]✓ Results auto-saved to: {txt_file}[/green]")
-            logger.info(f"Results auto-saved to {txt_file}")
+            self._log(f"[green]✓ Results auto-saved to: {csv_file}[/green]")
+            logger.info(f"Results auto-saved to {csv_file}")
         except (OSError, IOError, PermissionError) as e:
             self._log(f"[red]Failed to save results: {e}[/red]")
-            logger.error(f"Failed to auto-save results to {txt_file}: {e}")
+            logger.error(f"Failed to auto-save results to {csv_file}: {e}")
 
     def action_save_results(self) -> None:
-        """Save results to file.
+        """Save results as CSV.
 
         When slipstream testing is enabled, only save DNS servers that passed the proxy test.
         """
@@ -3103,56 +4034,23 @@ class DNSScannerTUI(App):
             logger.error(f"Failed to create results directory: {e}")
             return
 
-        # Save JSON
-        json_file = output_dir / f"scan_{timestamp}.json"
-        elapsed = time.time() - self.start_time
-
-        # Sort by response time
-        sorted_servers = sorted(servers_to_save.items(), key=lambda x: x[1])
-        servers_list = [ip for ip, _ in sorted_servers]
-
-        data = {
-            "scan_info": {
-                "domain": self.domain,
-                "dns_type": self.dns_type,
-                "slipstream_test": self.test_slipstream,
-                "total_found": len(self.found_servers),
-                "total_passed_proxy": (
-                    len(
-                        [
-                            ip
-                            for ip in self.proxy_results
-                            if self.proxy_results[ip] == "Success"
-                        ]
-                    )
-                    if self.test_slipstream
-                    else 0
-                ),
-                "total_saved": len(servers_to_save),
-                "elapsed_seconds": elapsed,
-                "timestamp": timestamp,
-            },
-            "servers": servers_list,
-        }
+        csv_file = output_dir / f"scan_{timestamp}.csv"
+        headers, rows = self._build_csv_headers_and_rows(servers_to_save)
 
         try:
-            with open(json_file, "wb") as f:
-                f.write(orjson.dumps(data, option=orjson.OPT_INDENT_2))
-
-            # Save TXT
-            txt_file = output_dir / f"scan_{timestamp}.txt"
-            with open(txt_file, "w", encoding="utf-8") as f:
-                for server in servers_list:
-                    f.write(f"{server}\n")
+            with open(csv_file, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                writer.writerows(rows)
 
             self.notify(
-                f"Saved {len(servers_list)} servers: {json_file.name}",
+                f"Saved {len(rows)} servers: {csv_file.name}",
                 severity="information",
             )
-            logger.info(f"Results saved to {json_file}")
+            logger.info(f"Results saved to {csv_file}")
         except (OSError, IOError, PermissionError) as e:
             self.notify(f"Failed to save results: {e}", severity="error")
-            logger.error(f"Failed to save results to {json_file}: {e}")
+            logger.error(f"Failed to save results to {csv_file}: {e}")
 
 
 def main():

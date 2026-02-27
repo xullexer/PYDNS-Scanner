@@ -1,4 +1,4 @@
-# PYDNS Scanner
+﻿# PYDNS Scanner
 
 <br>
 <div align="center">
@@ -13,7 +13,8 @@
 <div align="center">
   <img src="https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge" alt="Python">
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
-  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-orange?style=for-the-badge" alt="Platform">
+  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-orange?style=for-the-badge" alt="Platform">
+  <img src="https://img.shields.io/badge/Termux-Compatible-cyan?style=for-the-badge" alt="Termux">
 </div>
 
 <br>
@@ -22,75 +23,94 @@
   🇺🇸 <a href="https://github.com/xullexer/PYDNS-Scanner/blob/main/README.md"><b>English</b></a>
   &nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
   🇮🇷 <a href="https://github.com/xullexer/PYDNS-Scanner/blob/main/README-FA.md"><b>فارسی</b></a>
+  &nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp;
+  🇨🇳 <a href="https://github.com/xullexer/PYDNS-Scanner/blob/main/README-ZH.md"><b>中文</b></a>
 </div>
 
 <br>
 
 <div align="center">
   <strong>A modern, high-performance DNS scanner with a beautiful Terminal User Interface (TUI) built with Textual.</strong><br>
-  This tool can scan millions of IP addresses to find working DNS servers with optional Slipstream proxy testing and automatic multi-platform client download.
+  This tool can scan millions of IP addresses to find working DNS servers with optional Slipstream proxy testing and automatic multi-platform client download.<br>
+  <br>
+  <strong>🆕 v1.4.0: Resolved IP column, smart multi-key sorting, proxy HTTPS-CONNECT fix, performance improvements!</strong>
 </div>
 
-## 🎉 What's New in v1.2.0
+## 🎉 What's New in v1.4.0
 
-### 🎨 Visual & UX Improvements
-- **Small Screen Support** - Fixed height issues on small screen devices with scrollable form
-- **Enhanced Status Tracking** - Real-time Pass/Fail/Found statistics with color-coded display (white=Found, green=Pass, red=Fail)
-- **Failed Servers at End** - Failed proxy tests now appear at the bottom of results list
+### 🎨 Redesigned Start Menu
+- **Better UI** - Completely redesigned configuration screen with cleaner layout and improved visual hierarchy
+- **Optional log panel** - Log output is hidden by default; press `L` at any time during a scan to toggle it on or off
 
-### 🔐 Proxy Authentication
-- **Proxy Auth Support** - New toggle checkbox for proxies requiring authentication
-- **Username/Password Fields** - Hidden by default, shown when Proxy Auth is enabled
-- **HTTP & SOCKS5 Auth** - Authentication applied to both HTTP and SOCKS5 proxy tests
+### 🗂️ Three Scan Modes
+All three modes use identical scan logic. They differ only in how many IPs are read from the CIDR file and the **shuffle step** — if no working DNS is found within that many consecutive IPs, the remaining range is automatically reshuffled to avoid missing servers hidden deep in a subnet.
+- **Quick Scan** — up to 25,000 IPs, shuffle step every 500 IPs
+- **Deep Scan** — up to 50,000 IPs, shuffle step every 1,000 IPs
+- **Full Scan** — unlimited IPs (entire file), shuffle step every 3,000 IPs
 
-### ⌨️ Keyboard Shortcuts
-- **S** - Start scan (from config screen)
-- **Q** - Quit application
-- **C** - Save results to file
-- **P** - Pause scan (while scanning)
-- **R** - Resume scan (when paused)
-- **X** - Shuffle remaining IPs (when paused)
+### 🔐 Security Testing
+- **Hijack detection** - Detects if the DNS server is intercepting or redirecting queries
+- **Filtered detection** - Identifies servers that silently block certain domains
+- **Open resolver check** - Flags servers that resolve arbitrary external queries
+- **DNSSEC validation** - Reports whether the server returns signed (DNSSEC) responses
 
-### 🔔 Improved Audio
-- **Single Coin Sound** - Clean, single sparkle/coin notification on successful proxy test
+### 🌐 Network Analysis Columns
+- **Resolved IP** - Each candidate DNS server is used to resolve `google.com`; the resulting IP is shown in the results table
+- **ISP detection** - Displays AS number and organisation name for each DNS server via ip-api.com (rate-limited, async)
+- **IPv4 / IPv6 detection** - Shows whether the server responds on IPv4, IPv6, or both
+- **EDNS0 detection** - Tests and displays EDNS0 extension support
+- **TCP / UDP column** - Tests and shows which transports the server supports
 
----
+### 🔌 Slipstream Rust Plus — Improved Proxy Testing
+- **Upgraded to Slipstream Rust Plus client** ([Fox-Fig/slipstream-rust-plus-deploy](https://github.com/Fox-Fig/slipstream-rust-plus-deploy)) — significantly faster binaries across all platforms
+- **HTTPS CONNECT tunnel** - Proxy test now targets `https://www.google.com` via HTTP CONNECT; the previous plain-HTTP probe always returned "Failed"
+- **Independent SOCKS5 test** - SOCKS5 is tested on its own, not just as a fallback
+- **False-positive elimination** - Improved result validation removes incorrect pass/fail determinations
+- **Smart multi-key sort** - Results ordered by: Proxy pass → DNSSEC → fastest ping
 
-## 📦 What's in v1.1.0
+### 🗃️ Results Table Overhaul
+- **New column layout** - Port column removed; column order: Ping → [Proxy] → IPv4/IPv6 → Security → TCP/UDP → EDNS0 → Resolved IP → ISP
+- **Live pass/fail counters** - Statistics bar updates correctly throughout the scan
 
-### 🎨 Visual & UX Improvements
-- **GitHub Dark Theme** - Beautiful dark mode with GitHub-style colors (#0d1117 background, #58a6ff accents)
-- **Full-Screen Start Menu** - Configuration form now uses full terminal height/width
-- **Improved Dropdowns** - Fixed dropdown menu styling with proper height and text visibility
-- **Compact Checkboxes** - All options (Random Subdomain, Proxy Test, Bell Sound) in single row
+### 🐛 Bug Fixes
+- **Custom CIDR selection** - Fixed a bug where selecting a custom IP range file in the scan menu was not applied correctly
+- **/31 and /32 subnet fix** - IPs from these subnets were previously skipped silently
+- **ISP lock hang** - Rate-limit lock is now released before sleeping, eliminating pipeline stalls
 
-### ⚡ Performance Enhancements
-- **5 Concurrent Proxy Tests** - Increased from 3 to 5 parallel Slipstream tests (ports 10800-10804)
-- **Better Exit Handling** - Proper terminal restoration on quit with cursor and input recovery
-
-### 🌍 CIDR Management
-- **Bundled Iran IPs** - Pre-loaded ~10M Iran IPv4 addresses (iran-ipv4.cidrs)
-- **CIDR Dropdown** - Easy selection between Iran default and custom files
-- **Domain Caching** - Remembers last domain across sessions
+### ⚡ Performance & Module Improvements
+- **`google-re2`** - Replaced Python's stdlib `re` with Google's RE2 engine for faster, safer regex
+- **Per-test aiodns resolver** - Each DNS test creates its own resolver, preventing C-ares concurrency hangs
+- **Range-based IP shuffle** - Integer arithmetic replaces `list(subnet.hosts())` for large CIDR ranges
+- **ISP rate limiter** - ip-api.com capped with async lock + automatic 429 retry with 60 s backoff
+- **Windows socket advisory** - Warning logged when concurrency exceeds 64 (Windows selector event-loop cap)
 
 ## ✨ Features
 
-- 🎨 **Beautiful TUI Interface** - GitHub dark-themed terminal interface
+- 🎨 **Redesigned Start Menu** - Clean, modern configuration screen with improved layout
+- 🗂️ **Three Scan Modes** - Quick (25K IPs, step 500), Deep (50K IPs, step 1K), Full (unlimited, step 3K) — same logic, different scale
+- 🔄 **Auto-Shuffle** - Reshuffles remaining IPs automatically when no working DNS is found within the step range
+- 🔐 **Security Testing** - Detects hijacked, filtered, open resolver, and DNSSEC per server
+- 🌐 **Resolved IP Column** - Tests each DNS server by resolving `google.com`, result shown in table
+- 📡 **ISP Detection** - AS number and organisation name via ip-api.com
+- 🌍 **IPv4 / IPv6 Detection** - Reports which IP versions each server supports
+- 📶 **EDNS0 Detection** - Tests and displays EDNS0 extension support
+- 🔌 **Slipstream Rust Plus** - Faster proxy testing with false-positive fixes and independent SOCKS5 test
+- 🧮 **Smart Multi-key Sort** - Auto-sorts by proxy pass → DNSSEC → ping for best servers first
 - ⚡ **High Performance** - Asynchronous scanning with configurable concurrency
-- ⏸️ **Pause/Resume/Shuffle** - Full scan control
-- 📊 **Real-time Statistics** - Live progress tracking and scan metrics
-- 🔍 **Smart DNS Detection** - Detects working DNS servers even with error responses (NXDOMAIN, NODATA)
+- ⏸️ **Pause / Resume / Shuffle** - Full live scan control
+- 📊 **Real-time Statistics** - Live pass/fail/found counters updated throughout the scan
+- 🔍 **Smart DNS Detection** - Detects working DNS servers even with NXDOMAIN / NODATA responses
 - 🎲 **Random Subdomain Support** - Avoid cached responses with random subdomains
 - 🌐 **Multiple DNS Types** - Supports A, AAAA, MX, TXT, NS records
-- 🔌 **Slipstream Integration** - Optional proxy testing with 5 parallel executions
-- 🌍 **Multi-Platform Auto-Download** - Automatically downloads correct Slipstream client for your platform
+- 📝 **Optional Log Panel** - Hidden by default; press `L` during scan to toggle
+- 🌍 **Multi-Platform Auto-Download** - Automatically downloads the correct Slipstream client for your platform
 - 📥 **Resume Downloads** - Smart download resume on network interruptions with retry logic
-- 💾 **Auto-save Results** - Automatic JSON export of scan results
-- 📁 **CIDR Management** - Built-in Iran IPs + custom file picker
+- 💾 **Auto-save Results** - Automatic CSV export with per-server detail
+- 📁 **CIDR Management** - Built-in Iran IPs + custom file picker (bug-fixed)
 - ⚙️ **Configurable** - Adjustable concurrency, timeouts, and filters
 - 🚀 **Memory Efficient** - Streaming IP generation without loading all IPs into memory
-- 📝 **Optional Logging** - Disabled by default, easy to enable for troubleshooting
-- 🔔 **Audio Alerts** - Optional sparkle sound on successful proxy tests
+- 🚄 **google-re2** - Google's RE2 engine for faster, safer regex matching
+- 🔔 **Audio Alerts** - Optional sparkle sound on successful proxy test
 
 ## 📋 Requirements
 
@@ -107,6 +127,7 @@ httpx[socks]>=0.25.0  # HTTP client with SOCKS5 support for proxy testing
 orjson>=3.9.0         # Fast JSON serialization
 loguru>=0.7.0         # Advanced logging
 pyperclip>=1.8.0      # Clipboard support
+google-re2>=1.0       # Fast RE2 regex engine (replaces stdlib re)
 ```
 
 ### Optional
@@ -116,20 +137,24 @@ pyperclip>=1.8.0      # Clipboard support
   - **Resume Support**: Partial downloads are saved and can be resumed on retry
   - Supported platforms:
     - Linux (x86_64): `slipstream-client-linux-amd64`
+    - Linux (ARM64): `slipstream-client-linux-arm64`
     - Windows (x86_64): `slipstream-client-windows-amd64.exe`
     - macOS (ARM64): `slipstream-client-darwin-arm64`
     - macOS (Intel): `slipstream-client-darwin-amd64`
-  - Manual download available from: [slipstream-rust-deploy releases](https://github.com/AliRezaBeigy/slipstream-rust-deploy/releases/latest)
+    - Android (ARM64): `slipstream-client-linux-arm64`
+  - Manual download available from: [slipstream-rust-plus-deploy releases](https://github.com/Fox-Fig/slipstream-rust-plus-deploy/releases/latest)
 
 ### 📦 Bundled Slipstream Clients
 
-Pre-compiled Slipstream client binaries are included in the `slipstream-client/` folder for all platforms:
+Pre-compiled Slipstream client binaries (from the faster [Fox-Fig/slipstream-rust-plus-deploy](https://github.com/Fox-Fig/slipstream-rust-plus-deploy)) are included in the `slipstream-client/` folder for all platforms:
 
 | Platform | Path | Description |
 |----------|------|-------------|
-| **Linux** | `slipstream-client/linux/slipstream-client-linux-amd64` | Linux x86_64 binary |
+| **Linux x86_64** | `slipstream-client/linux/slipstream-client-linux-amd64` | Linux x86_64 binary |
+| **Linux ARM64** | `slipstream-client/linux/slipstream-client-linux-arm64` | Linux ARM64 binary (Raspberry Pi, ARM servers) |
+| **Android/Termux** | `slipstream-client/android/slipstream-client-linux-arm64` | Android ARM64 (Termux compatible) |
 | **Windows** | `slipstream-client/windows/slipstream-client-windows-amd64.exe` | Windows x86_64 executable |
-| **macOS ARM** | `slipstream-client/mac/slipstream-client-darwin-arm64` | macOS Apple Silicon (M1/M2/M3) |
+| **macOS ARM** | `slipstream-client/mac/slipstream-client-darwin-arm64` | macOS Apple Silicon (M1/M2/M3/M4) |
 | **macOS Intel** | `slipstream-client/mac/slipstream-client-darwin-amd64` | macOS Intel x86_64 |
 
 > **⚠️ Windows Note:** The Windows client requires OpenSSL DLLs (`libcrypto-3-x64.dll` and `libssl-3-x64.dll`) which are included in the `slipstream-client/windows/` folder. When using automatic download, these DLLs are downloaded automatically alongside the Windows executable.
@@ -279,8 +304,8 @@ Create a text file with one CIDR range per line:
    - Red = slow (>300ms)
 
 5. **Save results**:
-   - Results are auto-saved to `results/TIMESTAMP.txt`
-   - Press `s` or click "💾 Save Results" to save manually
+   - Results are auto-saved to `results/TIMESTAMP.csv`
+   - Press `c` or click "💾 Save Results" to save manually
 
 ## ⌨️ Keyboard Shortcuts
 
@@ -290,6 +315,7 @@ Create a text file with one CIDR range per line:
 | `q` | Anytime | Quit application |
 | `c` | While scanning | Save results |
 | `p` | While scanning | Pause scan |
+| `l` | While scanning | Toggle log panel |
 | `r` | When paused | Resume scan |
 | `x` | When paused | Shuffle remaining IPs |
 
@@ -342,7 +368,7 @@ The scanner supports parallel Slipstream proxy testing with automatic download:
 
 ```python
 # In __init__ method
-self.slipstream_max_concurrent = 3  # Max parallel proxy tests
+self.slipstream_max_concurrent = 5  # Max parallel proxy tests
 self.slipstream_base_port = 10800   # Base port (uses 10800, 10801, 10802)
 ```
 
@@ -364,23 +390,15 @@ resolver = aiodns.DNSResolver(nameservers=[ip], timeout=2.0, tries=1)
 
 ## 📊 Output Format
 
-Results are saved in JSON format:
+Results are saved in **CSV format** (`results/TIMESTAMP.csv`). Columns adapt to which tests are enabled:
 
-```json
-{
-  "scan_info": {
-    "domain": "google.com",
-    "dns_type": "A",
-    "slipstream_test": true,
-    "total_found": 50,
-    "total_passed_proxy": 42,
-    "total_saved": 42,
-    "elapsed_seconds": 300.5,
-    "timestamp": "2026-01-26_10-30-45"
-  },
-  "servers": ["8.8.8.8", "1.1.1.1", "..."]
-}
+```csv
+DNS,Ping (ms),IPv4/IPv6,TCP/UDP,Security,EDNS0,Resolved IP,ISP
+8.8.8.8,12,IPv4/IPv6,TCP+UDP,DNSSEC,Yes,142.250.185.46,AS15169 Google LLC
+1.1.1.1,15,IPv4/IPv6,TCP+UDP,DNSSEC,Yes,142.250.185.46,AS13335 Cloudflare Inc
 ```
+
+Optional columns (**Proxy Test**, **Security**, **EDNS0**) are included only when the corresponding test is enabled in settings.
 
 ## 🔍 How It Works
 
@@ -454,7 +472,7 @@ pip install textual
 ### Slipstream download fails
 - **Network issues**: The app automatically retries up to 5 times with exponential backoff
 - **Resume**: Partial downloads are saved as `.partial` files - just run again to resume
-- **Manual download**: Download from [slipstream-rust-deploy releases](https://github.com/AliRezaBeigy/slipstream-rust-deploy/releases/latest)
+- **Manual download**: Download from [slipstream-rust-plus-deploy releases](https://github.com/Fox-Fig/slipstream-rust-plus-deploy/releases/latest)
 - **Check logs**: Enable logging (see Configuration section) for detailed error info
 - **Firewall**: Ensure GitHub access is allowed
 
