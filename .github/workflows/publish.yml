@@ -57,13 +57,14 @@ jobs:
     permissions:
       contents: read
     strategy:
+      fail-fast: false
       matrix:
         include:
           - arch: aarch64
-            distro: ubuntu22.04
+            distro: bookworm
             artifact-name: pydns-scanner-linux-aarch64
           - arch: armv7
-            distro: ubuntu22.04
+            distro: bookworm
             artifact-name: pydns-scanner-linux-arm
     
     steps:
@@ -77,11 +78,16 @@ jobs:
           githubToken: ${{ github.token }}
           install: |
             apt-get update -q -y
-            apt-get install -q -y python3 python3-pip python3-venv python3-dev build-essential
+            apt-get install -q -y \
+              python3 python3-pip python3-venv python3-dev \
+              build-essential libffi-dev libssl-dev libc-ares-dev
           run: |
-            python3 -m pip install --break-system-packages pyinstaller
-            python3 -m pip install --break-system-packages -r requirements.txt
-            python3 -m PyInstaller --clean pydns-scanner.spec
+            python3 -m venv /opt/venv
+            . /opt/venv/bin/activate
+            pip install --upgrade pip setuptools wheel
+            pip install pyinstaller
+            pip install -r requirements.txt
+            python -m PyInstaller --clean pydns-scanner.spec
       
       - name: Upload artifact
         uses: actions/upload-artifact@v4
