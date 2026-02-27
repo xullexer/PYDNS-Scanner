@@ -77,7 +77,7 @@ jobs:
           distro: ${{ matrix.distro }}
           githubToken: ${{ github.token }}
           env: |
-            PYCARES_USE_SYSTEM_LIB=1
+            PYCARES_USE_SYSTEM_LIB: "1"
           install: |
             apt-get update -q -y
             apt-get install -q -y \
