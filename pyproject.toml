@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pydns-scanner"
-version = "1.4.3"
+version = "1.4.4"
 description = "A high-performance DNS scanner with GitHub dark-themed TUI, parallel Slipstream proxy testing, real-time ISP/EDNS0/DNSSEC/Resolved-IP checks, smart multi-key sorting, and Iran CIDR bundle"
 readme = "README.md"
 license = "MIT"
