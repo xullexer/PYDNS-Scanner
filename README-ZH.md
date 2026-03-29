@@ -3,7 +3,7 @@
 <br>
 <div align="center">
   <img
-    src="https://github.com/user-attachments/assets/4ed004bc-b64f-4407-abb0-b14bd010354e"
+    src="https://github.com/user-attachments/assets/e3d7e51e-1ecf-45d1-a855-63d7d080cb99"
     width="720"
     style="border-radius:12px;"
   />
@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge" alt="Python">
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-orange?style=for-the-badge" alt="Platform">
-  <img src="https://img.shields.io/badge/Termux-兼容-cyan?style=for-the-badge" alt="Termux">
+  <a href="https://t.me/xullexer"><img src="https://img.shields.io/badge/Telegram-xullexer-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram"></a>
 </div>
 
 <br>
@@ -31,7 +31,7 @@
 
 <div align="center">
   <strong>一款现代、高性能的 DNS 扫描器，拥有基于 Textual 构建的精美终端用户界面（TUI）。</strong><br>
-  该工具可扫描数百万个 IP 地址以发现可用的 DNS 服务器，支持可选的 Slipstream / SlipNet（DNSTT、NoiseDNS）代理测试、自动 DNS 类型评分和多平台客户端下载。<br>
+  该工具可扫描数百万个 IP 地址以发现可用的 DNS 服务器，提供三种扫描模式 — Slipstream、SlipNet（DNSTT、NoiseDNS）和 DNS Scan — 以及自动 DNS 类型评分和多平台客户端下载。<br>
   <br>
   <strong>🆕 v2.0.0：SlipNet 支持、DNS Scan 模式、双向多范围扫描、高级设置和重大性能提升！</strong>
 </div>

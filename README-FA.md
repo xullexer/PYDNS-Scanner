@@ -5,7 +5,7 @@
 <br>
 <div align="center">
   <img
-    src="https://github.com/user-attachments/assets/4ed004bc-b64f-4407-abb0-b14bd010354e"
+    src="https://github.com/user-attachments/assets/e3d7e51e-1ecf-45d1-a855-63d7d080cb99"
     width="720"
     style="border-radius:12px;"
   />
@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge" alt="Python">
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-orange?style=for-the-badge" alt="Platform">
-  <img src="https://img.shields.io/badge/Termux-%D8%B3%D8%A7%D8%B2%DA%AF%D8%A7%D8%B1-cyan?style=for-the-badge" alt="Termux">
+  <a href="https://t.me/xullexer"><img src="https://img.shields.io/badge/Telegram-xullexer-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram"></a>
 </div>
 
 
@@ -34,7 +34,7 @@
 
 <div align="center">
   <strong>یک اسکنر DNS مدرن و با کارایی بالا با رابط کاربری ترمینال (TUI) زیبا که با Textual ساخته شده است.</strong><br>
-  این ابزار می‌تواند میلیون‌ها آدرس IP را اسکن کند تا سرورهای DNS فعال را پیدا کند، با قابلیت تست پروکسی Slipstream / SlipNet (DNSTT، NoiseDNS)، امتیازدهی خودکار نوع DNS و دانلود خودکار چندپلتفرمی.<br>
+  این ابزار می‌تواند میلیون‌ها آدرس IP را اسکن کند تا سرورهای DNS فعال را پیدا کند، با سه حالت اسکن — Slipstream، SlipNet (DNSTT، NoiseDNS) و DNS Scan — به همراه امتیازدهی خودکار نوع DNS و دانلود خودکار چندپلتفرمی.<br>
   <br>
   <strong>🆕 نسخه ۲.۰.۰: پشتیبانی SlipNet، حالت DNS Scan، اسکن دوطرفه چند محدوده‌ای، تنظیمات پیشرفته و افزایش چشمگیر عملکرد!</strong>
 </div>

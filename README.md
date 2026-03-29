@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge" alt="Python">
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-orange?style=for-the-badge" alt="Platform">
-  <img src="https://img.shields.io/badge/Termux-Compatible-cyan?style=for-the-badge" alt="Termux">
+  <a href="https://t.me/xullexer"><img src="https://img.shields.io/badge/Telegram-xullexer-26A5E4?style=for-the-badge&logo=telegram&logoColor=white" alt="Telegram"></a>
 </div>
 
 <br>
@@ -31,7 +31,7 @@
 
 <div align="center">
   <strong>A modern, high-performance DNS scanner with a beautiful Terminal User Interface (TUI) built with Textual.</strong><br>
-  This tool can scan millions of IP addresses to find working DNS servers with optional Slipstream / SlipNet (DNSTT, NoiseDNS) proxy testing, automatic DNS type scoring, and multi-platform client download.<br>
+  This tool can scan millions of IP addresses to find working DNS servers with three scan modes — Slipstream, SlipNet (DNSTT, NoiseDNS), and DNS Scan — plus automatic DNS type scoring and multi-platform client download.<br>
   <br>
   <strong>🆕 v2.0.0: SlipNet support, DNS Scan mode, bidirectional multi-range scanning, Advanced settings, and major performance boost!</strong>
 </div>

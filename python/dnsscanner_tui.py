@@ -577,7 +577,7 @@ class DNSScannerTUI(
 
         # SlipNet protocol support
         self.slipnet_manager = SlipNetManager()
-        self.active_protocol: str = "slipstream"  # "slipstream" or "slipnet"
+        self.active_protocol: str = "slipstream"  # "slipstream", "slipnet", or "dns_scan"
         self.slipnet_url: str = ""
         self.auth_mode: str = "none"  # "none", "socks5", "ssh"
         self._proto_lock: bool = False
@@ -672,6 +672,7 @@ class DNSScannerTUI(
                     with Horizontal(classes="form-row checkbox-row"):
                         yield Checkbox("Slipstream", id="proto-slipstream", value=True)
                         yield Checkbox("SlipNet (DNSTT/NoizDNS)", id="proto-slipnet")
+                        yield Checkbox("DNS Scan", id="proto-dns-scan")
                     with Container(id="slipstream-auth-sub"):
                         yield Label("Auth:", classes="field-label")
                         with Horizontal(classes="form-row checkbox-row"):
@@ -686,7 +687,7 @@ class DNSScannerTUI(
                             placeholder="e.g., google.com",
                             id="input-domain",
                         )
-                    with Horizontal(classes="domain-checkboxes"):
+                    with Horizontal(classes="domain-checkboxes", id="domain-options"):
                         yield Checkbox("Random Subdomain", id="input-random")
 
                 with Container(id="slipnet-fields-container"):
@@ -883,6 +884,18 @@ class DNSScannerTUI(
                     self.query_one("#slipnet-query-size-container").display = True
                     for row in self.query(".domain-row"):
                         row.display = False
+                except Exception:
+                    pass
+            elif config.get("active_protocol") == "dns_scan":
+                try:
+                    self.query_one("#proto-slipstream", Checkbox).value = False
+                    self.query_one("#proto-dns-scan", Checkbox).value = True
+                    self.query_one("#slipstream-auth-sub").display = False
+                    self.query_one("#slipnet-fields-container").display = False
+                    self.query_one("#slipnet-query-size-container").display = False
+                    self.query_one("#input-slipstream", Checkbox).display = False
+                    self.query_one("#input-show-advanced", Checkbox).display = False
+                    self.query_one("#domain-options").display = False
                 except Exception:
                     pass
             else:
@@ -1250,22 +1263,25 @@ class DNSScannerTUI(
             except Exception as e:
                 logger.debug(f"Could not toggle advanced settings container: {e}")
 
-        elif cb_id in ("proto-slipstream", "proto-slipnet"):
+        elif cb_id in ("proto-slipstream", "proto-slipnet", "proto-dns-scan"):
             if self._proto_lock:
                 return
             self._proto_lock = True
             try:
                 if event.value:
-                    other_id = "proto-slipnet" if cb_id == "proto-slipstream" else "proto-slipstream"
-                    self.query_one(f"#{other_id}", Checkbox).value = False
+                    all_proto_ids = ("proto-slipstream", "proto-slipnet", "proto-dns-scan")
+                    for other_id in all_proto_ids:
+                        if other_id != cb_id:
+                            self.query_one(f"#{other_id}", Checkbox).value = False
                     is_slipnet = (cb_id == "proto-slipnet")
+                    is_dns_scan = (cb_id == "proto-dns-scan")
                     self.query_one("#slipnet-fields-container").display = is_slipnet
                     for row in self.query(".domain-row"):
                         row.display = not is_slipnet
-                    # SlipNet v2.4.1 handles auth internally; hide auth UI when SlipNet active
+                    # Hide auth UI for SlipNet and DNS Scan
                     try:
-                        self.query_one("#slipstream-auth-sub").display = not is_slipnet
-                        if is_slipnet:
+                        self.query_one("#slipstream-auth-sub").display = not is_slipnet and not is_dns_scan
+                        if is_slipnet or is_dns_scan:
                             self.query_one("#socks5-auth-container").display = False
                             self.query_one("#ssh-auth-container").display = False
                     except Exception:
@@ -1275,9 +1291,23 @@ class DNSScannerTUI(
                         self.query_one("#slipnet-query-size-container").display = is_slipnet
                     except Exception:
                         pass
+                    # DNS Scan: hide & disable proxy test, advanced, random subdomain
+                    try:
+                        self.query_one("#input-slipstream", Checkbox).display = not is_dns_scan
+                        if is_dns_scan:
+                            self.query_one("#input-slipstream", Checkbox).value = False
+                        self.query_one("#input-show-advanced", Checkbox).display = not is_dns_scan
+                        if is_dns_scan:
+                            self.query_one("#advanced-settings-container").display = False
+                        self.query_one("#domain-options").display = not is_dns_scan
+                        self.query_one("#input-random", Checkbox).display = not is_dns_scan
+                        if is_dns_scan:
+                            self.query_one("#input-random", Checkbox).value = False
+                    except Exception:
+                        pass
                 else:
-                    other_id = "proto-slipnet" if cb_id == "proto-slipstream" else "proto-slipstream"
-                    if not self.query_one(f"#{other_id}", Checkbox).value:
+                    all_proto_ids = ("proto-slipstream", "proto-slipnet", "proto-dns-scan")
+                    if not any(self.query_one(f"#{i}", Checkbox).value for i in all_proto_ids if i != cb_id):
                         event.checkbox.value = True
             except Exception as e:
                 logger.debug(f"Protocol checkbox error: {e}")
@@ -1546,7 +1576,12 @@ class DNSScannerTUI(
 
         # Determine active protocol from Checkbox
         try:
-            self.active_protocol = "slipnet" if self.query_one("#proto-slipnet", Checkbox).value else "slipstream"
+            if self.query_one("#proto-slipnet", Checkbox).value:
+                self.active_protocol = "slipnet"
+            elif self.query_one("#proto-dns-scan", Checkbox).value:
+                self.active_protocol = "dns_scan"
+            else:
+                self.active_protocol = "slipstream"
         except Exception:
             self.active_protocol = "slipstream"
 
@@ -1713,7 +1748,7 @@ class DNSScannerTUI(
         # Rebuild table columns based on enabled tests
         self._setup_table_columns()
 
-        if not self.domain and self.active_protocol == "slipstream":
+        if not self.domain and self.active_protocol != "slipnet":
             self.notify("Please enter a domain!", severity="error")
             return
 
