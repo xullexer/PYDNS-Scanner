@@ -1,867 +1,112 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+"""PYDNS-Scanner TUI — main application module.
+
+All reusable helpers, widgets, mixins and the SlipstreamManager live in the
+``scanner`` sub-package.  This file contains only the Textual App subclass
+(``DNSScannerTUI``) and the ``main()`` entry-point.
+"""
 
 from __future__ import annotations
 
 import asyncio
-import csv
 import gc
-import ipaddress
-import json
-import mmap
 import os
 import platform
 import random
-import secrets
-import socket
-import stat
-import struct
 import subprocess
 import sys
-import threading
 import time
 from collections import deque
-from datetime import datetime
 from pathlib import Path
-from typing import Set, AsyncGenerator, Optional
+from typing import Set
 
-import aiodns
+
+def _resource_path(relative: str) -> Path:
+    """Resolve a bundled resource path.
+
+    When running as a PyInstaller one-file executable, data files are
+    extracted to ``sys._MEIPASS``.  In normal (source) mode falls back to
+    the directory that contains this module.
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / relative
+    return Path(__file__).parent / relative
+
+import dns.asyncresolver
+import dns.exception
+import dns.resolver
 import httpx
-from loguru import logger
-from rich.markup import escape as markup_escape
-from rich.text import Text
-
-# ---------------------------------------------------------------------------
-# Platform detection — Android/Termux cannot use compiled C extensions
-# such as google-re2.  All other platforms try to use the fast version first.
-# ---------------------------------------------------------------------------
-def _is_android() -> bool:
-    """Detect Android/Termux environment."""
-    return (
-        os.path.exists("/data/data/com.termux") or
-        os.path.exists("/data/data/com.termux.fdroid") or
-        "com.termux" in os.environ.get("PREFIX", "") or
-        "ANDROID_ROOT" in os.environ or
-        "ANDROID_DATA" in os.environ
-    )
-
-_ANDROID = _is_android()
-
-try:
-    if _ANDROID:
-        raise ImportError("Skipping google-re2 on Android/Termux")
-    import re2 as re  # type: ignore  # noqa: F401
-except ImportError:
-    import re  # type: ignore  # noqa: F401
-
-try:
-    if _ANDROID:
-        raise ImportError("Skipping pyperclip on Android/Termux")
-    import pyperclip as _pyperclip_mod
-    def _copy_to_clipboard(text: str) -> bool:
-        try:
-            _pyperclip_mod.copy(text)
-            return True
-        except Exception:
-            return False
-except ImportError:
-    def _copy_to_clipboard(text: str) -> bool:  # type: ignore
-        return False
-
-if sys.platform == "win32":
-    # Required for aiodns/pycares to work on Windows
-    # They don't support ProactorEventLoop (default on Py3.8+)
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
-from textual.reactive import reactive
 from textual.widgets import (
     Button,
     DataTable,
-    Footer,
+    DirectoryTree,
     Header,
-    Static,
     RichLog,
     Input,
     Label,
-    Checkbox as TextualCheckbox,
     Select,
-    DirectoryTree,
-)
-from textual.widgets._directory_tree import DirEntry
-
-
-class Checkbox(TextualCheckbox):
-    """Custom Checkbox using a checkmark instead of X."""
-
-    BUTTON = "✓"
-
-
-class PlainDirectoryTree(DirectoryTree):
-    """Custom DirectoryTree that uses plain text icons instead of emojis for Linux compatibility."""
-
-    # Override class-level icon constants
-    ICON_FOLDER = "[DIR]  "
-    ICON_FOLDER_OPEN = "[DIR]  "
-    ICON_FILE = "[FILE] "
-
-    def render_label(self, node, base_style, style):
-        """Override render to ensure plain icons are used."""
-        node_label = node._label
-        icon = self.ICON_FILE
-
-        if isinstance(node.data, DirEntry):
-            if node.data.path.is_dir():
-                icon = self.ICON_FOLDER_OPEN if node.is_expanded else self.ICON_FOLDER
-
-        label = Text(icon, style=base_style + style) if icon else Text()
-        label.append(node_label.plain, base_style + style)
-        return label
-
-
-# Configure logging
-logger.remove()  # Remove default handler to disable all logging
-os.makedirs("logs", exist_ok=True)
-logger.add(
-    "logs/dnsscanner_{time}.log",
-    rotation="50 MB",
-    compression="zip",
-    level="DEBUG",
 )
 
-
-# Pre-compiled regex for stripping ANSI escape codes (used in proxy test output)
-_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
-
-
-def _run_slipstream_sync(
-    cmd: list, timeout: float = 15.0
-) -> tuple:
-    """Start slipstream and block-read stdout until 'Connection ready' or timeout.
-
-    Designed to run in a background thread (via asyncio.to_thread) because
-    asyncio.create_subprocess_exec is not supported on Windows with the Selector
-    event loop that aiodns requires.
-
-    Returns:
-        (process, connection_ready: bool, lines: list[str])
-        The process is NOT killed here; caller handles cleanup.
-    """
-    creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        creationflags=creationflags,
+# ── Scanner package imports ─────────────────────────────────────────────────
+try:
+    from .scanner import (
+        # Constants / platform
+        _copy_to_clipboard,
+        re,
+        logger,
+        # Widgets
+        Checkbox,
+        PlainDirectoryTree,
+        StatsWidget,
+        VersionedFooter,
+        # Standalone classes
+        SlipstreamManager,
+        SlipNetManager,
+        # Mixins (compose into DNSScannerTUI via multiple inheritance)
+        ConfigMixin,
+        ProxyTestingMixin,
+        ExtraTestsMixin,
+        ResultsMixin,
+        ISPCacheMixin,
+        IPStreamingMixin,
+    )
+except ImportError:
+    from scanner import (
+        # Constants / platform
+        _copy_to_clipboard,
+        re,
+        logger,
+        # Widgets
+        Checkbox,
+        PlainDirectoryTree,
+        StatsWidget,
+        VersionedFooter,
+        # Standalone classes
+        SlipstreamManager,
+        SlipNetManager,
+        # Mixins (compose into DNSScannerTUI via multiple inheritance)
+        ConfigMixin,
+        ProxyTestingMixin,
+        ExtraTestsMixin,
+        ResultsMixin,
+        ISPCacheMixin,
+        IPStreamingMixin,
     )
 
-    lines: list[str] = []
-    connection_ready = False
 
-    def _reader():
-        nonlocal connection_ready
-        try:
-            for raw in proc.stdout:
-                clean = _ANSI_ESCAPE_RE.sub(
-                    "", raw.decode("utf-8", "ignore")
-                ).strip()
-                lines.append(clean)
-                if "Connection ready" in clean:
-                    connection_ready = True
-                    return  # Stop reading; leave process running for proxy use
-        except Exception:
-            pass
-
-    reader = threading.Thread(target=_reader, daemon=True)
-    reader.start()
-    reader.join(timeout=timeout)
-    # If the reader is still alive after timeout: connection_ready is still False.
-    # The caller will kill the process (which closes stdout → _reader exits).
-    return proc, connection_ready, lines
-
-
-class SlipstreamManager:
-    """Manages slipstream client download and execution across platforms."""
-
-    DOWNLOAD_URLS = {
-        "Darwin-arm64": "https://github.com/Fox-Fig/slipstream-rust-plus-deploy/releases/latest/download/slipstream-client-darwin-arm64",
-        "Darwin-x86_64": "https://github.com/Fox-Fig/slipstream-rust-plus-deploy/releases/latest/download/slipstream-client-darwin-amd64",
-        "Windows": "https://github.com/Fox-Fig/slipstream-rust-plus-deploy/releases/latest/download/slipstream-client-windows-amd64.exe",
-        "Linux-x86_64": "https://github.com/Fox-Fig/slipstream-rust-plus-deploy/releases/latest/download/slipstream-client-linux-amd64",
-        "Linux-arm64": "https://github.com/Fox-Fig/slipstream-rust-plus-deploy/releases/latest/download/slipstream-client-linux-arm64",
-        "Android": "https://github.com/Fox-Fig/slipstream-rust-plus-deploy/releases/latest/download/slipstream-client-linux-arm64",
-    }
-
-    # Windows DLL dependencies (required for slipstream-client on Windows)
-    WINDOWS_DLLS = {
-        "libcrypto-3-x64.dll": "https://raw.githubusercontent.com/xullexer/PYDNS-Scanner/main/slipstream-client/windows/libcrypto-3-x64.dll",
-        "libssl-3-x64.dll": "https://raw.githubusercontent.com/xullexer/PYDNS-Scanner/main/slipstream-client/windows/libssl-3-x64.dll",
-    }
-
-    # Primary filenames (for new downloads)
-    FILENAMES = {
-        "Darwin-arm64": "slipstream-client-darwin-arm64",
-        "Darwin-x86_64": "slipstream-client-darwin-amd64",
-        "Windows": "slipstream-client-windows-amd64.exe",
-        "Linux-x86_64": "slipstream-client-linux-amd64",
-        "Linux-arm64": "slipstream-client-linux-arm64",
-        "Android": "slipstream-client-linux-arm64",
-    }
-
-    # Alternative filenames to check (for backwards compatibility)
-    ALT_FILENAMES = {
-        "Windows": ["slipstream-client.exe", "slipstream-client-windows-amd64.exe"],
-        "Darwin-arm64": ["slipstream-client", "slipstream-client-darwin-arm64"],
-        "Darwin-x86_64": ["slipstream-client", "slipstream-client-darwin-amd64"],
-        "Linux-x86_64": ["slipstream-client", "slipstream-client-linux-amd64"],
-        "Linux-arm64": ["slipstream-client", "slipstream-client-linux-arm64"],
-        "Android": ["slipstream-client", "slipstream-client-linux-arm64"],
-    }
-
-    PLATFORM_DIRS = {
-        "Darwin": "mac",
-        "Windows": "windows",
-        "Linux": "linux",
-        "Android": "android",
-    }
-
-    def __init__(self):
-        self.base_dir = Path(__file__).parent / "slipstream-client"
-        self.system = self._detect_system()
-        self.machine = platform.machine()
-        self._cached_executable_path: Optional[Path] = None
-
-        # Normalize machine architecture
-        if self.machine in ("x86_64", "AMD64", "i386", "i686", "x86"):
-            self.machine = "x86_64"
-        elif self.machine in ("aarch64", "arm64", "armv8l"):
-            self.machine = "arm64"
-        elif self.machine.startswith("arm"):
-            # For other ARM variants (armv7l, etc.), use arm64 binary
-            self.machine = "arm64"
-
-    @staticmethod
-    def _detect_system() -> str:
-        """Detect the operating system, including Android."""
-        # Check for Android first (before Linux check)
-        if os.environ.get("ANDROID_ROOT") or os.environ.get("ANDROID_DATA"):
-            return "Android"
-        
-        # Check for Termux (common Android terminal emulator)
-        if os.environ.get("TERMUX_VERSION") or Path("/data/data/com.termux").exists():
-            return "Android"
-        
-        # Check for Android build.prop
-        if Path("/system/build.prop").exists():
-            return "Android"
-        
-        # Fall back to standard platform detection
-        return platform.system()
-
-    def get_platform_key(self) -> str:
-        """Get the platform key for download URLs."""
-        # Windows uses a single key (no architecture differentiation)
-        if self.system == "Windows":
-            return "Windows"
-        elif self.system == "Android":
-            # Android always uses ARM64 binary (most Android devices are ARM)
-            return "Android"
-        elif self.system == "Linux":
-            # Linux differentiates between x86_64 and ARM64
-            return f"Linux-{self.machine}"
-        elif self.system == "Darwin":
-            # macOS differentiates between ARM and Intel
-            return f"Darwin-{self.machine}"
-        else:
-            raise RuntimeError(f"Unsupported platform: {self.system}")
-
-    def get_platform_dir(self) -> Path:
-        """Get the platform-specific directory."""
-        dir_name = self.PLATFORM_DIRS.get(self.system, self.system.lower())
-        return self.base_dir / dir_name
-
-    def get_executable_path(self) -> Path:
-        """Get the path to the slipstream executable.
-
-        First checks for any existing executable (including legacy names),
-        then falls back to the primary filename for new downloads.
-        """
-        # Return cached path if already found
-        if self._cached_executable_path and self._cached_executable_path.exists():
-            return self._cached_executable_path
-
-        platform_key = self.get_platform_key()
-        platform_dir = self.get_platform_dir()
-
-        # Check for alternative filenames first (existing installations)
-        alt_filenames = self.ALT_FILENAMES.get(platform_key, [])
-        for filename in alt_filenames:
-            exe_path = platform_dir / filename
-            if exe_path.exists():
-                self._cached_executable_path = exe_path
-                return exe_path
-
-        # Fall back to primary filename (for new downloads)
-        filename = self.FILENAMES.get(platform_key)
-        if not filename:
-            raise RuntimeError(f"Unsupported platform: {self.system} {self.machine}")
-
-        return platform_dir / filename
-
-    def is_installed(self) -> bool:
-        """Check if slipstream is already installed."""
-        platform_key = self.get_platform_key()
-        platform_dir = self.get_platform_dir()
-
-        # Check all possible filenames
-        alt_filenames = self.ALT_FILENAMES.get(platform_key, [])
-        for filename in alt_filenames:
-            if (platform_dir / filename).exists():
-                return True
-
-        # Also check primary filename
-        primary_filename = self.FILENAMES.get(platform_key)
-        if primary_filename and (platform_dir / primary_filename).exists():
-            return True
-
-        return False
-
-    def ensure_executable(self) -> bool:
-        """Ensure the slipstream executable has proper permissions.
-
-        On Linux/macOS, this sets the executable bit.
-        On Windows, no action is needed.
-
-        Returns:
-            True if permissions were set successfully or not needed, False on error.
-        """
-        try:
-            exe_path = self.get_executable_path()
-            if not exe_path.exists():
-                return False
-
-            if self.system in ("Linux", "Darwin"):
-                # Set executable bit for user, group, and others
-                current_mode = exe_path.stat().st_mode
-                exe_path.chmod(
-                    current_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
-                )
-                logger.info(f"Set executable permissions on {exe_path}")
-
-            return True
-        except Exception as e:
-            logger.error(f"Failed to set executable permissions: {e}")
-            return False
-
-    async def ensure_installed(self, log_callback=None) -> tuple[bool, str]:
-        """Ensure slipstream is installed. Download if not present.
-
-        Args:
-            log_callback: Optional callback(message) for status updates
-
-        Returns:
-            Tuple of (success, message)
-        """
-
-        def log(msg):
-            if log_callback:
-                log_callback(msg)
-            logger.info(msg)
-
-        # Check if already installed
-        if self.is_installed():
-            log("[green]✓ Slipstream client found[/green]")
-            return (True, "Already installed")
-
-        # Not installed, download it
-        log("[cyan]Slipstream client not found, downloading...[/cyan]")
-        success = await self.download()
-
-        if success:
-            log("[green]✓ Slipstream client downloaded successfully[/green]")
-            return (True, "Downloaded successfully")
-        else:
-            log("[red]✗ Failed to download Slipstream client[/red]")
-            return (False, "Download failed")
-
-    def get_download_url(self) -> Optional[str]:
-        """Get the download URL for current platform."""
-        try:
-            platform_key = self.get_platform_key()
-            return self.DOWNLOAD_URLS.get(platform_key)
-        except RuntimeError:
-            return None
-
-    async def download(
-        self, progress_callback=None, max_retries: int = 5, retry_delay: float = 2.0
-    ) -> bool:
-        """Download slipstream for the current platform with resume and retry support.
-
-        Args:
-            progress_callback: Optional callback(downloaded, total, status) for progress updates
-            max_retries: Maximum number of retry attempts
-            retry_delay: Delay between retries in seconds
-
-        Returns:
-            True if download successful, False otherwise
-        """
-        url = self.get_download_url()
-        if not url:
-            return False
-
-        exe_path = self.get_executable_path()
-        temp_path = exe_path.with_suffix(exe_path.suffix + ".partial")
-        platform_dir = self.get_platform_dir()
-
-        # Create directory if it doesn't exist
-        platform_dir.mkdir(parents=True, exist_ok=True)
-
-        for attempt in range(1, max_retries + 1):
-            try:
-                # Check if we have a partial download to resume
-                downloaded = 0
-                if temp_path.exists():
-                    downloaded = temp_path.stat().st_size
-
-                headers = {}
-                if downloaded > 0:
-                    headers["Range"] = f"bytes={downloaded}-"
-                    if progress_callback:
-                        progress_callback(
-                            downloaded,
-                            0,
-                            f"Resuming from {downloaded / (1024*1024):.1f} MB...",
-                        )
-
-                async with httpx.AsyncClient(
-                    follow_redirects=True,
-                    timeout=httpx.Timeout(30.0, read=60.0, connect=30.0),
-                    verify=True,  # Enable SSL verification
-                    limits=httpx.Limits(
-                        max_keepalive_connections=5, max_connections=10
-                    ),
-                ) as client:
-                    async with client.stream("GET", url, headers=headers) as response:
-                        # Check if server supports resume
-                        if response.status_code == 206:  # Partial content
-                            content_range = response.headers.get("content-range", "")
-                            if "/" in content_range:
-                                total = int(content_range.split("/")[1])
-                            else:
-                                total = downloaded + int(
-                                    response.headers.get("content-length", 0)
-                                )
-                            mode = "ab"  # Append mode
-                        elif response.status_code == 200:
-                            # Server doesn't support resume, start fresh
-                            total = int(response.headers.get("content-length", 0))
-                            downloaded = 0
-                            mode = "wb"  # Write mode (overwrite)
-                        else:
-                            response.raise_for_status()
-                            continue
-
-                        if progress_callback:
-                            progress_callback(downloaded, total, "Downloading...")
-
-                        with open(temp_path, mode) as f:
-                            async for chunk in response.aiter_bytes(chunk_size=32768):
-                                f.write(chunk)
-                                downloaded += len(chunk)
-                                if progress_callback:
-                                    progress_callback(
-                                        downloaded, total, "Downloading..."
-                                    )
-
-                # Download complete - rename temp file to final
-                if temp_path.exists():
-                    if exe_path.exists():
-                        exe_path.unlink()
-                    temp_path.rename(exe_path)
-
-                # Make executable on Unix-like systems
-                if self.system in ("Linux", "Darwin"):
-                    exe_path.chmod(
-                        exe_path.stat().st_mode
-                        | stat.S_IXUSR
-                        | stat.S_IXGRP
-                        | stat.S_IXOTH
-                    )
-                    logger.info(f"Set executable permissions on {exe_path}")
-
-                # Download Windows DLLs if on Windows
-                if self.system == "Windows":
-                    await self._download_windows_dlls()
-
-                return True
-
-            except (
-                httpx.TimeoutException,
-                httpx.NetworkError,
-                httpx.HTTPStatusError,
-                httpx.ConnectError,
-            ) as e:
-                error_msg = f"{type(e).__name__}"
-                if hasattr(e, "__cause__") and e.__cause__:
-                    error_msg += f": {str(e.__cause__)}"
-
-                if progress_callback:
-                    progress_callback(
-                        downloaded, 0, f"Retry {attempt}/{max_retries}: {error_msg}"
-                    )
-
-                if attempt < max_retries:
-                    await asyncio.sleep(retry_delay * attempt)  # Exponential backoff
-                    continue
-                else:
-                    # Max retries reached, keep partial file for next attempt
-                    return False
-            except Exception as e:
-                # Unexpected error - clean up partial download
-                logger.error(f"Unexpected download error: {e}", exc_info=True)
-                if temp_path.exists():
-                    temp_path.unlink()
-                return False
-
-        return False
-
-    async def _download_windows_dlls(self, log_callback=None) -> bool:
-        """Download required Windows DLL dependencies.
-
-        Args:
-            log_callback: Optional callback(message) for status updates
-
-        Returns:
-            True if all DLLs downloaded successfully, False otherwise
-        """
-        if self.system != "Windows":
-            return True
-
-        platform_dir = self.get_platform_dir()
-        platform_dir.mkdir(parents=True, exist_ok=True)
-
-        def log(msg):
-            if log_callback:
-                log_callback(msg)
-            logger.info(msg)
-
-        all_success = True
-        for dll_name, dll_url in self.WINDOWS_DLLS.items():
-            dll_path = platform_dir / dll_name
-
-            # Skip if DLL already exists
-            if dll_path.exists():
-                log(f"[dim]DLL already exists: {dll_name}[/dim]")
-                continue
-
-            try:
-                log(f"[cyan]Downloading {dll_name}...[/cyan]")
-                async with httpx.AsyncClient(
-                    follow_redirects=True,
-                    timeout=httpx.Timeout(30.0, read=60.0, connect=30.0),
-                    verify=True,
-                ) as client:
-                    response = await client.get(dll_url)
-                    response.raise_for_status()
-
-                    with open(dll_path, "wb") as f:
-                        f.write(response.content)
-
-                    log(f"[green]✓ Downloaded {dll_name}[/green]")
-            except Exception as e:
-                log(f"[red]Failed to download {dll_name}: {e}[/red]")
-                all_success = False
-
-        return all_success
-
-    async def download_with_ui(
-        self, progress_bar, log_widget, max_retries: int = 5, retry_delay: float = 2.0
-    ) -> bool:
-        """Download slipstream with UI updates for progress bar and log.
-
-        This method handles UI updates directly in the async context without using call_from_thread.
-
-        Args:
-            progress_bar: CustomProgressBar widget to update
-            log_widget: RichLog widget to write status messages
-            max_retries: Maximum number of retry attempts
-            retry_delay: Delay between retries in seconds
-
-        Returns:
-            True if download successful, False otherwise
-        """
-        url = self.get_download_url()
-        if not url:
-            log_widget.write("[red]No download URL available for this platform[/red]")
-            return False
-
-        exe_path = self.get_executable_path()
-        temp_path = exe_path.with_suffix(exe_path.suffix + ".partial")
-        platform_dir = self.get_platform_dir()
-
-        # Create directory if it doesn't exist
-        platform_dir.mkdir(parents=True, exist_ok=True)
-
-        last_logged_percent = -1
-
-        for attempt in range(1, max_retries + 1):
-            try:
-                # Check if we have a partial download to resume
-                downloaded = 0
-                if temp_path.exists():
-                    downloaded = temp_path.stat().st_size
-
-                headers = {}
-                if downloaded > 0:
-                    headers["Range"] = f"bytes={downloaded}-"
-                    log_widget.write(
-                        f"[cyan]Resuming from {downloaded / (1024*1024):.1f} MB...[/cyan]"
-                    )
-
-                async with httpx.AsyncClient(
-                    follow_redirects=True,
-                    timeout=httpx.Timeout(30.0, read=60.0, connect=30.0),
-                    verify=True,
-                    limits=httpx.Limits(
-                        max_keepalive_connections=5, max_connections=10
-                    ),
-                ) as client:
-                    async with client.stream("GET", url, headers=headers) as response:
-                        # Check if server supports resume
-                        if response.status_code == 206:  # Partial content
-                            content_range = response.headers.get("content-range", "")
-                            if "/" in content_range:
-                                total = int(content_range.split("/")[1])
-                            else:
-                                total = downloaded + int(
-                                    response.headers.get("content-length", 0)
-                                )
-                            mode = "ab"  # Append mode
-                        elif response.status_code == 200:
-                            # Server doesn't support resume, start fresh
-                            total = int(response.headers.get("content-length", 0))
-                            downloaded = 0
-                            mode = "wb"  # Write mode (overwrite)
-                        else:
-                            response.raise_for_status()
-                            continue
-
-                        log_widget.write(
-                            f"[cyan]Downloading...[/cyan] Total: {total / (1024*1024):.1f} MB"
-                        )
-
-                        with open(temp_path, mode) as f:
-                            async for chunk in response.aiter_bytes(chunk_size=32768):
-                                f.write(chunk)
-                                downloaded += len(chunk)
-
-                                # Update progress bar
-                                if total > 0:
-                                    progress_bar.update_progress(downloaded, total)
-
-                                    # Log progress at 10% intervals
-                                    current_percent = (
-                                        int((downloaded / total) * 10) * 10
-                                    )
-                                    if current_percent > last_logged_percent:
-                                        last_logged_percent = current_percent
-                                        mb_downloaded = downloaded / (1024 * 1024)
-                                        mb_total = total / (1024 * 1024)
-                                        log_widget.write(
-                                            f"[dim]Progress: {mb_downloaded:.1f}/{mb_total:.1f} MB ({current_percent}%)[/dim]"
-                                        )
-
-                # Download complete - rename temp file to final
-                if temp_path.exists():
-                    if exe_path.exists():
-                        exe_path.unlink()
-                    temp_path.rename(exe_path)
-
-                # Make executable on Unix-like systems
-                if self.system in ("Linux", "Darwin"):
-                    exe_path.chmod(
-                        exe_path.stat().st_mode
-                        | stat.S_IXUSR
-                        | stat.S_IXGRP
-                        | stat.S_IXOTH
-                    )
-                    log_widget.write(
-                        "[green]✓ Set executable permissions on slipstream client[/green]"
-                    )
-
-                # Download Windows DLLs if on Windows
-                if self.system == "Windows":
-                    log_widget.write(
-                        "[cyan]Downloading required Windows DLLs...[/cyan]"
-                    )
-                    await self._download_windows_dlls_with_ui(log_widget)
-
-                return True
-
-            except (
-                httpx.TimeoutException,
-                httpx.NetworkError,
-                httpx.HTTPStatusError,
-                httpx.ConnectError,
-            ) as e:
-                error_msg = f"{type(e).__name__}"
-                if hasattr(e, "__cause__") and e.__cause__:
-                    error_msg += f": {str(e.__cause__)}"
-
-                log_widget.write(
-                    f"[yellow]Retry {attempt}/{max_retries}: {error_msg}[/yellow]"
-                )
-
-                if attempt < max_retries:
-                    log_widget.write(
-                        f"[dim]Waiting {retry_delay * attempt:.0f}s before retry...[/dim]"
-                    )
-                    await asyncio.sleep(retry_delay * attempt)  # Exponential backoff
-                    continue
-                else:
-                    # Max retries reached, keep partial file for next attempt
-                    return False
-            except Exception as e:
-                log_widget.write(
-                    f"[red]Unexpected error: {type(e).__name__}: {e}[/red]"
-                )
-                # Unexpected error - clean up partial download
-                if temp_path.exists():
-                    temp_path.unlink()
-                return False
-
-        return False
-
-    async def _download_windows_dlls_with_ui(self, log_widget) -> bool:
-        """Download required Windows DLL dependencies with UI updates.
-
-        Args:
-            log_widget: RichLog widget to write status messages
-
-        Returns:
-            True if all DLLs downloaded successfully, False otherwise
-        """
-        if self.system != "Windows":
-            return True
-
-        platform_dir = self.get_platform_dir()
-        platform_dir.mkdir(parents=True, exist_ok=True)
-
-        all_success = True
-        for dll_name, dll_url in self.WINDOWS_DLLS.items():
-            dll_path = platform_dir / dll_name
-
-            # Skip if DLL already exists
-            if dll_path.exists():
-                log_widget.write(f"[dim]DLL already exists: {dll_name}[/dim]")
-                continue
-
-            try:
-                log_widget.write(f"[cyan]Downloading {dll_name}...[/cyan]")
-                async with httpx.AsyncClient(
-                    follow_redirects=True,
-                    timeout=httpx.Timeout(30.0, read=60.0, connect=30.0),
-                    verify=True,
-                ) as client:
-                    response = await client.get(dll_url)
-                    response.raise_for_status()
-
-                    with open(dll_path, "wb") as f:
-                        f.write(response.content)
-
-                    log_widget.write(f"[green]✓ Downloaded {dll_name}[/green]")
-            except Exception as e:
-                log_widget.write(f"[red]Failed to download {dll_name}: {e}[/red]")
-                all_success = False
-
-        return all_success
-
-    def get_run_command(self, dns_ip: str, port: int, domain: str) -> list:
-        """Get the command to run slipstream (same args for all platforms).
-
-        Args:
-            dns_ip: DNS server IP
-            port: TCP listen port
-            domain: Domain for slipstream
-
-        Returns:
-            List of command arguments
-        """
-        exe_path = self.get_executable_path()
-
-        # Ensure executable permissions are set (important for Linux/macOS)
-        self.ensure_executable()
-
-        return [
-            str(exe_path),
-            "--resolver",
-            f"{dns_ip}:53",
-            "--resolver",
-            "8.8.4.4:53",
-            "--tcp-listen-port",
-            str(port),
-            "--domain",
-            domain,
-        ]
-
-
-class StatsWidget(Static):
-    """Display scan statistics."""
-
-    found = reactive(0)
-    passed = reactive(0)
-    failed = reactive(0)
-    scanned = reactive(0)
-    total = reactive(0)
-    speed = reactive(0.0)
-    elapsed = reactive(0.0)
-
-    def render(self) -> str:
-        """Render the stats."""
-        return f"""[b cyan]PYDNS Scanner Statistics[/b cyan]
-
-[yellow]Total IPs:[/yellow] {self.total:,}
-[yellow]Scanned:[/yellow] {self.scanned:,}
-[white]Found:[/white] {self.found}
-[green]Pass:[/green] {self.passed}
-[red]Fail:[/red] {self.failed}
-[yellow]Speed:[/yellow] {self.speed:.1f} IPs/sec
-[yellow]Elapsed:[/yellow] {self.elapsed:.1f}s
-"""
-
-
-class CustomProgressBar(Static):
-    """Custom progress bar with ▓▒ style and float percentage."""
-
-    progress = reactive(0.0)
-    total = reactive(100.0)
-    bar_width = 40  # Width of the bar in characters
-
-    def render(self) -> str:
-        """Render the custom progress bar."""
-        if self.total <= 0:
-            percent = 0.0
-        else:
-            percent = (self.progress / self.total) * 100
-
-        # Calculate filled portion
-        filled = int((percent / 100) * self.bar_width)
-        empty = self.bar_width - filled
-
-        # Build the bar with ▓ for filled and ▒ for empty
-        bar = "▓" * filled + "▒" * empty
-
-        # Color: green for filled, dim for empty
-        return f"[green]{bar[:filled]}[/green][dim]{bar[filled:]}[/dim] [cyan]{percent:.2f}%[/cyan]"
-
-    def update_progress(self, progress: float, total: float) -> None:
-        """Update progress values."""
-        self.progress = progress
-        self.total = total
-
-
-class DNSScannerTUI(App):
+class DNSScannerTUI(
+    ConfigMixin,
+    ProxyTestingMixin,
+    ExtraTestsMixin,
+    ResultsMixin,
+    ISPCacheMixin,
+    IPStreamingMixin,
+    App,
+):
     """PYDNS-Scanner with Textual TUI."""
 
     TITLE = "PYDNS-Scanner"
@@ -892,7 +137,7 @@ class DNSScannerTUI(App):
     Footer > .footer--description {
         color: #c9d1d9;
     }
-    
+
     /* Start Screen Styles */
     #start-screen {
         width: 100%;
@@ -1020,15 +265,6 @@ class DNSScannerTUI(App):
         background: #21262d;
     }
     
-    #progress-container {
-        width: 100%;
-        height: 3;
-        margin: 0 1;
-        border: solid #30363d;
-        background: #161b22;
-        padding: 0 1;
-    }
-
     #start-buttons {
         width: 100%;
         height: auto;
@@ -1042,6 +278,46 @@ class DNSScannerTUI(App):
         display: none;
         padding: 0;
         margin: 0;
+    }
+
+    #slipnet-fields-container {
+        width: 100%;
+        height: auto;
+        display: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    #slipstream-auth-sub {
+        width: 100%;
+        height: auto;
+        padding: 0;
+        margin: 0;
+    }
+
+    #socks5-auth-container {
+        width: 100%;
+        height: auto;
+        display: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    #ssh-auth-container {
+        width: 100%;
+        height: auto;
+        display: none;
+        padding: 0;
+        margin: 0;
+    }
+
+    #protocol-auth-section {
+        width: 100%;
+        height: auto;
+        border: solid #30363d;
+        background: #0d1117;
+        padding: 1 2;
+        margin: 0 0 1 0;
     }
     
     /* Scan Screen Styles */
@@ -1063,23 +339,7 @@ class DNSScannerTUI(App):
 
     #stats-logs-container {
         width: 100%;
-        height: 14;
-    }
-
-    #progress-bar {
-        width: 100%;
-        max-width: 100%;
-        height: 1;
-        content-align: center middle;
-    }
-    
-    ProgressBar > .bar--bar {
-        color: #238636;
-        background: #21262d;
-    }
-    
-    ProgressBar > .bar--complete {
-        color: #238636;
+        height: 18;
     }
 
     #results {
@@ -1215,6 +475,15 @@ class DNSScannerTUI(App):
     .domain-field {
         align: center top;
     }
+
+    #advanced-settings-container {
+        display: none;
+        height: auto;
+        padding: 0 2;
+        margin: 0 0 1 0;
+        border: solid #30363d;
+        background: #0d1117;
+    }
     """
 
     BINDINGS = [
@@ -1224,7 +493,6 @@ class DNSScannerTUI(App):
         ("p", "pause_scan", "Pause"),
         ("r", "resume_scan", "Resume"),
         ("x", "shuffle_ips", "Shuffle"),
-        ("l", "toggle_logs", "Logs"),
     ]
 
     def __init__(self):
@@ -1234,15 +502,37 @@ class DNSScannerTUI(App):
         self.domain = ""
         self.dns_type = "A"
         self.dns_test_method = "udp"  # "udp" (port 53)
-        # Calculate default concurrency as 70% of optimal
+        # Calculate default concurrency as 90% of optimal
         optimal = self._get_optimal_concurrency()
-        self.concurrency = int(optimal * 0.3)
+        self.concurrency = int(optimal * 0.9)
         self.random_subdomain = False
         self.test_slipstream = False
         self.bell_sound_enabled = False  # Bell sound on pass
         self.proxy_auth_enabled = False  # Proxy authentication
         self.proxy_username = ""  # Proxy username
         self.proxy_password = ""  # Proxy password
+
+        # Advanced settings (configurable from start form)
+        self.dns_timeout: float = 2.0  # Seconds for DNS test timeout
+        self.slipstream_timeout: float = 15.0  # Seconds for slipstream tunnel + HTTP test
+        self.proxy_test_url: str = "https://www.google.com/gen_204"
+        self.proxy_success_code: int = 204  # Expected HTTP status code for proxy test success
+        self.proxy_ping_threshold: int = 800  # 0 = test all; otherwise only ping <= this ms
+
+        # Experimental OS MTU
+        self.os_mtu: int = 0                   # 0 = disabled
+        self._original_mtu: int = 0            # stores MTU before we changed it
+        self._mtu_interface: str = ""          # interface name we changed
+
+        # SlipNet DNS query size (0 = default/full capacity)
+        self.slipnet_query_size: int = 0
+
+        # ISP cache file path — kept in cwd so it is always writable,
+        # even when running as a frozen PyInstaller one-file EXE.
+        self._isp_cache_path = Path("isp_cache.json")
+
+        # Scan strategy: "shuffle" (random order) or "redis" (pincer from edges)
+        self.scan_strategy = "redis"
 
         # Scan preset settings
         self.scan_preset = "fast"  # "fast", "deep", "full"
@@ -1266,6 +556,7 @@ class DNSScannerTUI(App):
         self.protocol_results: dict[str, dict] = {}  # IP -> {ipv6, edns0}
         self.isp_results: dict[str, dict] = {}  # IP -> {asn, org, country}
         self.tcp_udp_results: dict[str, str] = {}  # IP -> "TCP/UDP", "TCP only", "UDP only"
+        self.dns_types_results: dict[str, dict] = {}  # IP -> {A: bool, TXT: bool, ...}
         self.extra_test_tasks: set = set()  # Track running extra test tasks
         self.extra_test_semaphore: asyncio.Semaphore | None = None  # Limits concurrent extra tests
 
@@ -1275,7 +566,6 @@ class DNSScannerTUI(App):
 
         # Cached widget references (populated in on_mount)
         self._stats_widget: "StatsWidget | None" = None
-        self._progress_bar_widget: "CustomProgressBar | None" = None
 
         # Config file for caching settings
         self.config_dir = Path.home() / ".pydns-scanner"
@@ -1285,6 +575,18 @@ class DNSScannerTUI(App):
         self.slipstream_path = str(self.slipstream_manager.get_executable_path())
         self.slipstream_domain = ""
 
+        # SlipNet protocol support
+        self.slipnet_manager = SlipNetManager()
+        self.active_protocol: str = "slipstream"  # "slipstream" or "slipnet"
+        self.slipnet_url: str = ""
+        self.auth_mode: str = "none"  # "none", "socks5", "ssh"
+        self._proto_lock: bool = False
+        self._auth_lock: bool = False
+        self.ssh_host: str = ""
+        self.ssh_port: int = 22
+        self.ssh_user: str = ""
+        self.ssh_pass: str = ""
+
         # whether to perform the full HTTP/SOCKS check after slipstream starts
 
         self.found_servers: Set[str] = set()  # Keep found servers for results
@@ -1293,9 +595,13 @@ class DNSScannerTUI(App):
             {}
         )  # IP -> "Success", "Failed", or "Testing"
         self.start_time = 0.0
+        self._paused_elapsed: float = 0.0
+        self._pause_started_at: float = 0.0
         self.last_update_time = 0.0
         self.last_table_update_time = 0.0
         self.current_scanned = 0
+        self._current_scanning_ip: str = ""
+        self._current_scanning_range: str = ""
         self.table_needs_rebuild = False
         self.scan_started = False
         self.is_paused = False
@@ -1306,7 +612,7 @@ class DNSScannerTUI(App):
         self._processing_button = False
 
         # Slipstream parallel testing config
-        self.slipstream_max_concurrent = 5
+        self.slipstream_max_concurrent = 3
         self.slipstream_base_port = 10800  # Base port, will use 10800-10804
         self.available_ports: deque = deque()  # Available ports for testing
         self.slipstream_semaphore: asyncio.Semaphore = (
@@ -1321,9 +627,13 @@ class DNSScannerTUI(App):
         )  # Track all slipstream processes for cleanup
 
         # Shuffle support - memory efficient
-        self.remaining_ips: list = []  # Legacy, kept for compat
+        self.remaining_ips: list = []
         self.shuffle_signal: asyncio.Event | None = None  # Signal to reshuffle during scan
-        self.tested_subnets: set[str] = set()  # Track completed /24 blocks (memory-efficient)
+        self.tested_subnets: set[int] = set()  # Track completed /24 blocks as int(network_address)
+
+        # Debug logging support
+        self.debug_mode: bool = False
+        self._debug_log_file = None
 
     def compose(self) -> ComposeResult:
         """Create child widgets."""
@@ -1357,6 +667,18 @@ class DNSScannerTUI(App):
                 with Container(id="file-browser-container"):
                     yield PlainDirectoryTree(".", id="file-browser")
 
+                with Container(id="protocol-auth-section"):
+                    yield Label("Protocol:", classes="field-label")
+                    with Horizontal(classes="form-row checkbox-row"):
+                        yield Checkbox("Slipstream", id="proto-slipstream", value=True)
+                        yield Checkbox("SlipNet (DNSTT/NoizDNS)", id="proto-slipnet")
+                    with Container(id="slipstream-auth-sub"):
+                        yield Label("Auth:", classes="field-label")
+                        with Horizontal(classes="form-row checkbox-row"):
+                            yield Checkbox("No Auth", id="auth-none", value=True)
+                            yield Checkbox("SOCKS5", id="auth-socks5")
+                            yield Checkbox("SSH", id="auth-ssh")
+
                 with Horizontal(classes="form-row domain-row"):
                     with Vertical(classes="form-field domain-field"):
                         yield Label("Domain:", classes="field-label")
@@ -1366,9 +688,18 @@ class DNSScannerTUI(App):
                         )
                     with Horizontal(classes="domain-checkboxes"):
                         yield Checkbox("Random Subdomain", id="input-random")
-                        yield Checkbox("Proxy Auth", id="input-proxy-auth")
 
-                with Container(id="proxy-auth-container"):
+                with Container(id="slipnet-fields-container"):
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="form-field"):
+                            yield Label("SlipNet URL:", classes="field-label")
+                            yield Input(
+                                placeholder="slipnet://BASE64...",
+                                id="input-slipnet-url",
+                                classes="form-input",
+                            )
+
+                with Container(id="socks5-auth-container"):
                     with Horizontal(classes="form-row"):
                         yield Input(
                             placeholder="proxy username",
@@ -1382,20 +713,30 @@ class DNSScannerTUI(App):
                             password=True,
                         )
 
-                with Horizontal(classes="form-row"):
-                    with Vertical(classes="form-field"):
-                        yield Label("DNS Type:", classes="field-label")
-                        yield Select(
-                            [
-                                ("A (IPv4)", "A"),
-                                ("AAAA (IPv6)", "AAAA"),
-                                ("MX (Mail)", "MX"),
-                                ("TXT", "TXT"),
-                                ("NS", "NS"),
-                            ],
-                            value="A",
-                            allow_blank=False,
-                            id="input-type",
+                with Container(id="ssh-auth-container"):
+                    with Horizontal(classes="form-row"):
+                        yield Input(
+                            placeholder="SSH Host",
+                            id="input-ssh-host",
+                            classes="form-input",
+                        )
+                        yield Input(
+                            placeholder="22",
+                            id="input-ssh-port",
+                            classes="form-input",
+                            value="22",
+                        )
+                    with Horizontal(classes="form-row"):
+                        yield Input(
+                            placeholder="SSH Username",
+                            id="input-ssh-user",
+                            classes="form-input",
+                        )
+                        yield Input(
+                            placeholder="SSH Password",
+                            id="input-ssh-pass",
+                            classes="form-input",
+                            password=True,
                         )
 
                 with Horizontal(classes="form-row"):
@@ -1410,6 +751,78 @@ class DNSScannerTUI(App):
                 with Horizontal(classes="form-row checkbox-row"):
                     yield Checkbox("Proxy Test", id="input-slipstream")
                     yield Checkbox("Bell on Pass", id="input-bell")
+                    yield Checkbox("Advanced", id="input-show-advanced")
+
+                with Container(id="advanced-settings-container"):
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="form-field"):
+                            yield Label("DNS Timeout (s):", classes="field-label")
+                            yield Input(
+                                placeholder="2.0",
+                                id="input-dns-timeout",
+                                value="2.0",
+                            )
+                        with Vertical(classes="form-field"):
+                            yield Label("Proxy Timeout (s):", classes="field-label")
+                            yield Input(
+                                placeholder="15.0",
+                                id="input-proxy-timeout",
+                                value="15.0",
+                            )
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="form-field"):
+                            yield Label("Proxy Test URL:", classes="field-label")
+                            yield Input(
+                                placeholder="https://www.google.com/gen_204",
+                                id="input-test-url",
+                                value="https://www.google.com/gen_204",
+                            )
+                        with Vertical(classes="form-field"):
+                            yield Label("Expected Status Code (custom URL only):", classes="field-label")
+                            yield Input(
+                                placeholder="200",
+                                id="input-proxy-success-code",
+                                value="200",
+                            )
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="form-field"):
+                            yield Label("Minimum Ping to Test (ms, 0=all, blank=800):", classes="field-label")
+                            yield Input(
+                                placeholder="0 = test all (default 800)",
+                                id="input-proxy-ping-threshold",
+                                value="800",
+                            )
+                        with Vertical(classes="form-field"):
+                            yield Label("Parallel Proxy Tests (1-7):", classes="field-label")
+                            yield Input(
+                                placeholder="3 (default)",
+                                id="input-proxy-parallel",
+                                value="3",
+                            )
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="form-field"):
+                            yield Label("Auto-Shuffle After N IPs (0=preset):", classes="field-label")
+                            yield Input(
+                                placeholder="0",
+                                id="input-shuffle-threshold",
+                                value="0",
+                            )
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="form-field"):
+                            yield Label("!! Experimental OS Network MTU (10-1500, 0=off) [Admin/Root Required]:", classes="field-label")
+                            yield Input(
+                                placeholder="0 (disabled)",
+                                id="input-os-mtu",
+                                value="0",
+                            )
+                        with Container(id="slipnet-query-size-container", classes="form-field"):
+                            yield Label("SlipNet Query Size (bytes, 0=default, min 50):", classes="field-label")
+                            yield Input(
+                                placeholder="0 (full capacity)",
+                                id="input-slipnet-query-size",
+                                value="0",
+                            )
+                            yield Label("Presets: 100 / 80 / 60 / 55 / 50", classes="field-label")
 
                 with Horizontal(id="start-buttons"):
                     yield Button("Start Scan", id="start-scan-btn", variant="success")
@@ -1419,10 +832,8 @@ class DNSScannerTUI(App):
         with Container(id="scan-screen"):
             with Horizontal(id="stats-logs-container"):
                 yield StatsWidget(id="stats")
-                with Container(id="logs", classes="hidden"):
-                    yield RichLog(id="log-display", highlight=True, markup=True)
-            with Container(id="progress-container"):
-                yield CustomProgressBar(id="progress-bar")
+                with Container(id="logs"):
+                    yield RichLog(id="log-display", highlight=True, markup=True, max_lines=5000)
             with Container(id="results"):
                 yield DataTable(id="results-table")
             with Horizontal(id="controls"):
@@ -1432,46 +843,7 @@ class DNSScannerTUI(App):
                 yield Button("Save Results", id="save-btn", variant="success")
                 yield Button("Quit", id="quit-btn", variant="error")
 
-        yield Footer()
-
-    def _load_cached_domain(self) -> str:
-        """Load last used domain from config file (legacy compatibility)."""
-        config = self._load_config()
-        return config.get("domain", "")
-
-    def _load_config(self) -> dict:
-        """Load complete configuration from file."""
-        try:
-            if self.config_file.exists():
-                with open(self.config_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.debug(f"Config file corrupted or invalid, ignoring: {e}")
-        except (OSError, IOError) as e:
-            logger.debug(f"Failed to read config file: {e}")
-        except Exception as e:
-            logger.warning(f"Unexpected error loading config: {e}")
-        return {}
-
-    def _save_domain_cache(self, domain: str) -> None:
-        """Save domain to config (legacy method, use _save_config instead)."""
-        config = self._load_config()
-        config["domain"] = domain
-        self._save_config(config)
-
-    def _save_config(self, config: dict) -> None:
-        """Save complete configuration to file."""
-        try:
-            # Create config directory if it doesn't exist
-            self.config_dir.mkdir(parents=True, exist_ok=True)
-
-            # Save config
-            with open(self.config_file, "w", encoding="utf-8") as f:
-                json.dump(config, f, indent=2)
-        except (OSError, IOError) as e:
-            logger.debug(f"Failed to save config (permission/IO error): {e}")
-        except Exception as e:
-            logger.warning(f"Unexpected error saving config: {e}")
+        yield VersionedFooter()
 
     def on_mount(self) -> None:
         """Initialize when app is mounted."""
@@ -1497,35 +869,85 @@ class DNSScannerTUI(App):
                 concurrency_input = self.query_one("#input-concurrency", Input)
                 concurrency_input.value = str(config["concurrency"])
 
-            # DNS Type
-            if config.get("dns_type"):
-                type_select = self.query_one("#input-type", Select)
-                type_select.value = config["dns_type"]
-
             # Scan Preset
             if config.get("scan_preset"):
                 preset_select = self.query_one("#input-preset", Select)
                 preset_select.value = config["scan_preset"]
 
-            # Proxy Auth
-            if config.get("proxy_auth_enabled"):
-                proxy_auth_checkbox = self.query_one("#input-proxy-auth", Checkbox)
-                proxy_auth_checkbox.value = config["proxy_auth_enabled"]
-                # Show proxy auth container
-                self.query_one("#proxy-auth-container").display = True
+            # Protocol selector
+            if config.get("active_protocol") == "slipnet":
+                try:
+                    self.query_one("#proto-slipstream", Checkbox).value = False
+                    self.query_one("#proto-slipnet", Checkbox).value = True
+                    self.query_one("#slipnet-fields-container").display = True
+                    self.query_one("#slipnet-query-size-container").display = True
+                    for row in self.query(".domain-row"):
+                        row.display = False
+                except Exception:
+                    pass
+            else:
+                try:
+                    self.query_one("#slipnet-query-size-container").display = False
+                except Exception:
+                    pass
 
-                # Proxy credentials
-                if config.get("proxy_username"):
-                    proxy_user_input = self.query_one("#input-proxy-user", Input)
-                    proxy_user_input.value = config["proxy_username"]
+            # SlipNet URL
+            if config.get("slipnet_url"):
+                try:
+                    self.query_one("#input-slipnet-url", Input).value = config["slipnet_url"]
+                except Exception:
+                    pass
 
-                if config.get("proxy_password"):
-                    # Decode password from base64
+            # Auth mode (Slipstream only — SlipNet uses embedded auth in URI)
+            if config.get("active_protocol", "slipstream") != "slipnet":
+                saved_auth = config.get("auth_mode", "none")
+                if saved_auth == "socks5":
+                    try:
+                        self.query_one("#auth-none", Checkbox).value = False
+                        self.query_one("#auth-socks5", Checkbox).value = True
+                        self.query_one("#socks5-auth-container").display = True
+                    except Exception:
+                        pass
+                elif saved_auth == "ssh":
+                    try:
+                        self.query_one("#auth-none", Checkbox).value = False
+                        self.query_one("#auth-ssh", Checkbox).value = True
+                        self.query_one("#ssh-auth-container").display = True
+                    except Exception:
+                        pass
+                if config.get("proxy_auth_enabled"):
+                    if config.get("proxy_username"):
+                        try:
+                            self.query_one("#input-proxy-user", Input).value = config["proxy_username"]
+                        except Exception:
+                            pass
+                    if config.get("proxy_password"):
+                        import base64
+                        try:
+                            decoded_pass = base64.b64decode(config["proxy_password"]).decode("utf-8")
+                            self.query_one("#input-proxy-pass", Input).value = decoded_pass
+                        except Exception:
+                            pass
+                if config.get("ssh_host"):
+                    try:
+                        self.query_one("#input-ssh-host", Input).value = config["ssh_host"]
+                    except Exception:
+                        pass
+                if config.get("ssh_port"):
+                    try:
+                        self.query_one("#input-ssh-port", Input).value = str(config["ssh_port"])
+                    except Exception:
+                        pass
+                if config.get("ssh_user"):
+                    try:
+                        self.query_one("#input-ssh-user", Input).value = config["ssh_user"]
+                    except Exception:
+                        pass
+                if config.get("ssh_pass"):
                     import base64
                     try:
-                        decoded_pass = base64.b64decode(config["proxy_password"]).decode("utf-8")
-                        proxy_pass_input = self.query_one("#input-proxy-pass", Input)
-                        proxy_pass_input.value = decoded_pass
+                        decoded_ssh_pass = base64.b64decode(config["ssh_pass"]).decode("utf-8")
+                        self.query_one("#input-ssh-pass", Input).value = decoded_ssh_pass
                     except Exception:
                         pass
 
@@ -1533,6 +955,26 @@ class DNSScannerTUI(App):
             if config.get("slipstream_enabled") is not None:
                 slip_checkbox = self.query_one("#input-slipstream", Checkbox)
                 slip_checkbox.value = config.get("slipstream_enabled")
+
+            # Advanced settings
+            if config.get("dns_timeout"):
+                self.query_one("#input-dns-timeout", Input).value = str(config["dns_timeout"])
+            if config.get("slipstream_timeout"):
+                self.query_one("#input-proxy-timeout", Input).value = str(config["slipstream_timeout"])
+            if config.get("proxy_test_url"):
+                self.query_one("#input-test-url", Input).value = config["proxy_test_url"]
+            if config.get("proxy_success_code"):
+                self.query_one("#input-proxy-success-code", Input).value = str(config["proxy_success_code"])
+            if config.get("proxy_ping_threshold") is not None:
+                self.query_one("#input-proxy-ping-threshold", Input).value = str(config["proxy_ping_threshold"])
+            if config.get("shuffle_threshold"):
+                self.query_one("#input-shuffle-threshold", Input).value = str(config["shuffle_threshold"])
+            if config.get("proxy_parallel") is not None:
+                self.query_one("#input-proxy-parallel", Input).value = str(config["proxy_parallel"])
+            if config.get("os_mtu") is not None:
+                self.query_one("#input-os-mtu", Input).value = str(config["os_mtu"])
+            if config.get("slipnet_query_size") is not None:
+                self.query_one("#input-slipnet-query-size", Input).value = str(config["slipnet_query_size"])
 
         except Exception as e:
             logger.debug(f"Could not set cached config values: {e}")
@@ -1543,7 +985,6 @@ class DNSScannerTUI(App):
         # Cache frequently accessed widget references
         try:
             self._stats_widget = self.query_one("#stats", StatsWidget)
-            self._progress_bar_widget = self.query_one("#progress-bar", CustomProgressBar)
         except Exception as e:
             logger.debug(f"Could not cache widget refs: {e}")
 
@@ -1557,17 +998,17 @@ class DNSScannerTUI(App):
 
     def _get_table_columns(self) -> list[tuple[str, str, int | None]]:
         """Return list of (label, key, width) for unified results table."""
-        cols: list[tuple[str, str, int | None]] = [
-            ("IP Address", "ip", None),
-            ("Ping", "time", None),
-        ]
+        cols: list[tuple[str, str, int | None]] = []
         if self.test_slipstream:
-            cols.append(("Proxy Test", "proxy", None))
+            cols.append(("Proxy", "proxy", 12))
+        cols.append(("IP Address", "ip", None))
+        cols.append(("Ping", "time", None))
         cols.append(("IPv4/IPv6", "ipver", None))
         cols.append(("Security", "security", None))
         cols.append(("TCP/UDP", "tcpudp", None))
+        cols.append(("DNS Types", "dns_types", 20))
         cols.append(("EDNS0", "edns0", None))
-        cols.append(("Resolved IP", "resolved", None))
+        cols.append(("IP", "resolved", None))
         cols.append(("ISP", "isp", 50))
         return cols
 
@@ -1600,7 +1041,7 @@ class DNSScannerTUI(App):
                     logger.debug(f"Process already terminated or inaccessible: {e}")
             self.slipstream_processes.clear()
 
-        # Cancel all active scan tasks
+        # Cancel active DNS scan tasks
         if hasattr(self, "active_scan_tasks"):
             for task in list(self.active_scan_tasks):
                 try:
@@ -1608,7 +1049,10 @@ class DNSScannerTUI(App):
                         task.cancel()
                 except Exception as e:
                     logger.debug(f"Could not cancel scan task: {e}")
-            self.active_scan_tasks.clear()
+            if isinstance(self.active_scan_tasks, set):
+                self.active_scan_tasks.clear()
+            else:
+                self.active_scan_tasks = []
 
         # Cancel all slipstream test tasks
         if hasattr(self, "slipstream_tasks"):
@@ -1630,6 +1074,23 @@ class DNSScannerTUI(App):
                     logger.debug(f"Could not cancel extra test task: {e}")
             self.extra_test_tasks.clear()
 
+        # Clear pending proxy test queue
+        if hasattr(self, "pending_slipstream_tests"):
+            self.pending_slipstream_tests.clear()
+
+        # Close shared HTTP client if open
+        if hasattr(self, "_http_client") and self._http_client:
+            try:
+                import asyncio as _aio
+                loop = _aio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self._http_client.aclose())
+                else:
+                    loop.run_until_complete(self._http_client.aclose())
+            except Exception:
+                pass
+            self._http_client = None
+
         # Cancel all Textual workers
         try:
             self.workers.cancel_all()
@@ -1638,6 +1099,9 @@ class DNSScannerTUI(App):
 
         # Force garbage collection
         gc.collect()
+
+        # Close debug log if still open
+        self._close_debug_log()
 
         # Restore terminal state before force exit
         try:
@@ -1672,6 +1136,9 @@ class DNSScannerTUI(App):
                 print("\033[?25h", end="", flush=True)  # Show cursor
             except (FileNotFoundError, subprocess.SubprocessError) as e:
                 logger.debug(f"Unix terminal reset failed: {e}")
+
+        # Revert OS MTU before exit
+        self._revert_os_mtu()
 
         # Force exit
         os._exit(0)
@@ -1708,17 +1175,6 @@ class DNSScannerTUI(App):
                 # Force immediate yield to process shuffle signal
                 self.call_later(lambda: None)
     
-    def action_toggle_logs(self) -> None:
-        """Toggle log panel visibility with 'L' key."""
-        try:
-            logs_container = self.query_one("#logs")
-            if "hidden" in logs_container.classes:
-                logs_container.remove_class("hidden")
-            else:
-                logs_container.add_class("hidden")
-        except Exception as e:
-            logger.debug(f"Could not toggle logs: {e}")
-
     def action_start_scan(self) -> None:
         """Keybinding action to start scan from config screen."""
         if not self.scan_started:
@@ -1785,12 +1241,69 @@ class DNSScannerTUI(App):
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         """Handle checkbox state changes."""
-        if event.checkbox.id == "input-proxy-auth":
+        cb_id = event.checkbox.id
+
+        if cb_id == "input-show-advanced":
             try:
-                container = self.query_one("#proxy-auth-container")
+                container = self.query_one("#advanced-settings-container")
                 container.display = event.value
             except Exception as e:
-                logger.debug(f"Could not toggle proxy auth container: {e}")
+                logger.debug(f"Could not toggle advanced settings container: {e}")
+
+        elif cb_id in ("proto-slipstream", "proto-slipnet"):
+            if self._proto_lock:
+                return
+            self._proto_lock = True
+            try:
+                if event.value:
+                    other_id = "proto-slipnet" if cb_id == "proto-slipstream" else "proto-slipstream"
+                    self.query_one(f"#{other_id}", Checkbox).value = False
+                    is_slipnet = (cb_id == "proto-slipnet")
+                    self.query_one("#slipnet-fields-container").display = is_slipnet
+                    for row in self.query(".domain-row"):
+                        row.display = not is_slipnet
+                    # SlipNet v2.4.1 handles auth internally; hide auth UI when SlipNet active
+                    try:
+                        self.query_one("#slipstream-auth-sub").display = not is_slipnet
+                        if is_slipnet:
+                            self.query_one("#socks5-auth-container").display = False
+                            self.query_one("#ssh-auth-container").display = False
+                    except Exception:
+                        pass
+                    # Show query-size setting only for SlipNet
+                    try:
+                        self.query_one("#slipnet-query-size-container").display = is_slipnet
+                    except Exception:
+                        pass
+                else:
+                    other_id = "proto-slipnet" if cb_id == "proto-slipstream" else "proto-slipstream"
+                    if not self.query_one(f"#{other_id}", Checkbox).value:
+                        event.checkbox.value = True
+            except Exception as e:
+                logger.debug(f"Protocol checkbox error: {e}")
+            finally:
+                self._proto_lock = False
+
+        elif cb_id in ("auth-none", "auth-socks5", "auth-ssh"):
+            if self._auth_lock:
+                return
+            self._auth_lock = True
+            try:
+                if event.value:
+                    others = [i for i in ("auth-none", "auth-socks5", "auth-ssh") if i != cb_id]
+                    for other_id in others:
+                        self.query_one(f"#{other_id}", Checkbox).value = False
+                    self.query_one("#socks5-auth-container").display = (cb_id == "auth-socks5")
+                    self.query_one("#ssh-auth-container").display = (cb_id == "auth-ssh")
+                else:
+                    others_on = [i for i in ("auth-none", "auth-socks5", "auth-ssh")
+                                 if i != cb_id and self.query_one(f"#{i}", Checkbox).value]
+                    if not others_on:
+                        event.checkbox.value = True
+            except Exception as e:
+                logger.debug(f"Auth checkbox error: {e}")
+            finally:
+                self._auth_lock = False
 
     def on_directory_tree_file_selected(
         self, event: DirectoryTree.FileSelected
@@ -1836,6 +1349,7 @@ class DNSScannerTUI(App):
             return
 
         self.is_paused = True
+        self._pause_started_at = time.time()
         self.pause_event.clear()
         self._log("[yellow]⏸  Scan paused[/yellow]")
         self.notify("Scan paused", severity="warning")
@@ -1877,6 +1391,9 @@ class DNSScannerTUI(App):
             # The scan loop will handle the shuffled order appropriately
 
         self.is_paused = False
+        if self._pause_started_at > 0:
+            self._paused_elapsed += time.time() - self._pause_started_at
+            self._pause_started_at = 0.0
         self.pause_event.set()
         self._log("[green]▶  Scan resumed[/green]")
         self.notify("Scan resumed", severity="information")
@@ -1908,32 +1425,41 @@ class DNSScannerTUI(App):
         self._update_keybinding_visibility(scanning=True, paused=False)
 
     def _get_optimal_concurrency(self) -> int:
-        """Calculate optimal concurrency based on system resources."""
+        """Calculate optimal *total* concurrency based on system resources.
+
+        The multi-threaded worker pool distributes work across N threads,
+        each with its own event loop.  We cap the total so the pool stays
+        within ~6-8 threads (the sweet-spot before OS scheduling overhead
+        dominates on Windows).
+        """
         try:
             cpu_count = os.cpu_count() or 2
-            # Try to detect available memory
-            try:
-                import shutil
-                total, used, free = shutil.disk_usage("/")
-                # Use a simple heuristic based on CPU count
-                if cpu_count >= 8:
-                    return 500
-                elif cpu_count >= 4:
-                    return 200
-                else:
-                    return 100
-            except Exception:
-                pass
 
-            # Fallback: scale based on CPU count
-            if cpu_count >= 8:
-                return 500
-            elif cpu_count >= 4:
-                return 200
-            else:
-                return 100
+            # Try psutil for accurate memory detection
+            try:
+                import psutil  # type: ignore
+                mem_gb = psutil.virtual_memory().available / (1024 ** 3)
+                # ~50 concurrent per GB free, scaled by CPU
+                mem_based = int(mem_gb * 50)
+                cpu_based = cpu_count * 50
+                optimal = max(100, min(mem_based, cpu_based, 600))
+            except ImportError:
+                # Fallback: scale based on CPU count only
+                if cpu_count >= 8:
+                    optimal = 400
+                elif cpu_count >= 4:
+                    optimal = 250
+                else:
+                    optimal = 150
+
+            # Hard cap: more than ~440 on Windows (8 threads × 55) gives
+            # diminishing returns due to thread scheduling overhead.
+            if sys.platform == "win32":
+                optimal = min(optimal, 440)
+
+            return optimal
         except Exception:
-            return 100
+            return 200
 
     def _apply_scan_preset(self) -> None:
         """Apply scan preset settings."""
@@ -1959,7 +1485,6 @@ class DNSScannerTUI(App):
         # Get form values
         cidr_select = self.query_one("#input-cidr-select", Select)
         domain_input = self.query_one("#input-domain", Input)
-        type_select = self.query_one("#input-type", Select)
         concurrency_input = self.query_one("#input-concurrency", Input)
         random_checkbox = self.query_one("#input-random", Checkbox)
         slipstream_checkbox = self.query_one("#input-slipstream", Checkbox)
@@ -1970,7 +1495,7 @@ class DNSScannerTUI(App):
 
         if cidr_value == "iran":
             # Use bundled Iran CIDR file as default
-            iran_cidr_path = Path(__file__).parent / "iran-ipv4.cidrs"
+            iran_cidr_path = _resource_path("iran-ipv4.cidrs")
             if not iran_cidr_path.exists():
                 self.notify(
                     "Iran CIDR file not found! Please reinstall or select a custom file.",
@@ -2001,27 +1526,94 @@ class DNSScannerTUI(App):
             self.subnet_file = self.selected_cidr_file
         else:
             # Fallback to Iran default
-            iran_cidr_path = Path(__file__).parent / "iran-ipv4.cidrs"
+            iran_cidr_path = _resource_path("iran-ipv4.cidrs")
             self.subnet_file = str(iran_cidr_path)
 
         self.domain = domain_input.value.strip()
+        # When using SlipNet, the domain field may be hidden / empty.
+        # Fall back to a sensible default so DNS probes still work.
+        if not self.domain:
+            self.domain = "google.com"
         self.slipstream_domain = self.domain
-        self.dns_type = str(type_select.value) if type_select.value else "A"
+        self.dns_type = "A"
         self.random_subdomain = random_checkbox.value
         self.test_slipstream = slipstream_checkbox.value
         self.bell_sound_enabled = bell_checkbox.value
+        try:
+            self.debug_mode = self.query_one("#input-debug", Checkbox).value
+        except Exception:
+            self.debug_mode = False
 
-        # Get proxy auth settings
-        proxy_auth_checkbox = self.query_one("#input-proxy-auth", Checkbox)
-        self.proxy_auth_enabled = proxy_auth_checkbox.value
-        if self.proxy_auth_enabled:
-            proxy_user_input = self.query_one("#input-proxy-user", Input)
-            proxy_pass_input = self.query_one("#input-proxy-pass", Input)
-            self.proxy_username = proxy_user_input.value.strip()
-            self.proxy_password = proxy_pass_input.value
-            if not self.proxy_username:
-                self.notify("Please enter proxy username!", severity="error")
+        # Determine active protocol from Checkbox
+        try:
+            self.active_protocol = "slipnet" if self.query_one("#proto-slipnet", Checkbox).value else "slipstream"
+        except Exception:
+            self.active_protocol = "slipstream"
+
+        # SlipNet-specific validation (only when proxy test is enabled)
+        if self.active_protocol == "slipnet" and self.test_slipstream:
+            slipnet_url_str = self.query_one("#input-slipnet-url", Input).value.strip()
+            if not slipnet_url_str or not slipnet_url_str.startswith("slipnet://"):
+                self.notify("Please enter a valid SlipNet URL (slipnet://...)!", severity="error")
                 return
+            self.slipnet_url = slipnet_url_str
+
+            # Parse SlipNet config to extract the tunnel domain
+            parsed_cfg = SlipNetManager.parse_config(self.slipnet_url)
+            if parsed_cfg.get("domain"):
+                self.domain = parsed_cfg["domain"]
+                self.slipstream_domain = self.domain
+            # v2.4.1 handles SOCKS5 auth internally via the slipnet:// URI.
+
+        # Determine auth mode (Slipstream only; SlipNet v2.4.1 handles auth internally)
+        if self.active_protocol == "slipstream":
+            try:
+                if self.query_one("#auth-socks5", Checkbox).value:
+                    self.auth_mode = "socks5"
+                elif self.query_one("#auth-ssh", Checkbox).value:
+                    self.auth_mode = "ssh"
+                else:
+                    self.auth_mode = "none"
+            except Exception:
+                self.auth_mode = "none"
+
+            if self.auth_mode == "socks5":
+                proxy_user_input = self.query_one("#input-proxy-user", Input)
+                proxy_pass_input = self.query_one("#input-proxy-pass", Input)
+                self.proxy_username = proxy_user_input.value.strip()
+                self.proxy_password = proxy_pass_input.value
+                self.proxy_auth_enabled = bool(self.proxy_username)
+                if not self.proxy_username:
+                    self.notify("Please enter proxy username!", severity="error")
+                    return
+            elif self.auth_mode == "ssh":
+                self.ssh_host = self.query_one("#input-ssh-host", Input).value.strip()
+                self.ssh_port = 22
+                try:
+                    ssh_port_str = self.query_one("#input-ssh-port", Input).value.strip()
+                    if ssh_port_str:
+                        self.ssh_port = int(ssh_port_str)
+                except (ValueError, Exception):
+                    self.ssh_port = 22
+                self.ssh_user = self.query_one("#input-ssh-user", Input).value.strip()
+                self.ssh_pass = self.query_one("#input-ssh-pass", Input).value
+                if not self.ssh_host or not self.ssh_user:
+                    self.notify("Please enter SSH host and username!", severity="error")
+                    return
+                # SSH auth controls the remote tunnel; the local SOCKS5 proxy is no-auth.
+                self.proxy_username = ""
+                self.proxy_password = ""
+                self.proxy_auth_enabled = False
+            else:
+                self.proxy_auth_enabled = False
+                self.proxy_username = ""
+                self.proxy_password = ""
+        else:
+            # SlipNet: auth is embedded in the slipnet:// URI, handled by v2.4.1
+            self.auth_mode = "none"
+            self.proxy_auth_enabled = False
+            self.proxy_username = ""
+            self.proxy_password = ""
 
         # Get scan preset
         preset_select = self.query_one("#input-preset", Select)
@@ -2031,23 +1623,97 @@ class DNSScannerTUI(App):
         # Get concurrency (auto or manual)
         concurrency_str = concurrency_input.value.strip().lower()
         if concurrency_str == "auto" or not concurrency_str:
-            # Calculate 70% of optimal
+            # Calculate 90% of optimal
             optimal = self._get_optimal_concurrency()
-            self.concurrency = int(optimal * 0.7)
+            self.concurrency = int(optimal * 0.9)
         else:
             try:
                 self.concurrency = int(concurrency_str)
             except ValueError:
                 optimal = self._get_optimal_concurrency()
-                self.concurrency = int(optimal * 0.7)
+                self.concurrency = int(optimal * 0.9)
 
         # Get general settings (NOT saved - user selects each time)
         # All general settings are now always enabled
 
+        # Get advanced settings
+        try:
+            dns_timeout_str = self.query_one("#input-dns-timeout", Input).value.strip()
+            self.dns_timeout = float(dns_timeout_str) if dns_timeout_str else 2.0
+            if self.dns_timeout <= 0:
+                self.dns_timeout = 2.0
+        except (ValueError, Exception):
+            self.dns_timeout = 2.0
+
+        try:
+            proxy_timeout_str = self.query_one("#input-proxy-timeout", Input).value.strip()
+            self.slipstream_timeout = float(proxy_timeout_str) if proxy_timeout_str else 15.0
+            if self.slipstream_timeout <= 0:
+                self.slipstream_timeout = 15.0
+        except (ValueError, Exception):
+            self.slipstream_timeout = 15.0
+
+        try:
+            test_url_str = self.query_one("#input-test-url", Input).value.strip()
+            self.proxy_test_url = test_url_str if test_url_str else "https://www.google.com/gen_204"
+        except Exception:
+            self.proxy_test_url = "https://www.google.com/gen_204"
+
+        # If URL is the default gen_204, lock to 204; otherwise use the user's custom code
+        DEFAULT_URL = "https://www.google.com/gen_204"
+        if self.proxy_test_url == DEFAULT_URL:
+            self.proxy_success_code = 204
+        else:
+            try:
+                code_str = self.query_one("#input-proxy-success-code", Input).value.strip()
+                self.proxy_success_code = int(code_str) if code_str else 200
+                if self.proxy_success_code <= 0:
+                    self.proxy_success_code = 200
+            except (ValueError, Exception):
+                self.proxy_success_code = 200
+
+        try:
+            threshold_str = self.query_one("#input-proxy-ping-threshold", Input).value.strip()
+            self.proxy_ping_threshold = int(threshold_str) if threshold_str else 800
+            # 0 means "test all proxies"; only negatives are invalid
+            if self.proxy_ping_threshold < 0:
+                self.proxy_ping_threshold = 0
+        except (ValueError, Exception):
+            self.proxy_ping_threshold = 800
+
+        try:
+            shuffle_str = self.query_one("#input-shuffle-threshold", Input).value.strip()
+            custom_shuffle = int(shuffle_str) if shuffle_str else 0
+            if custom_shuffle > 0:
+                self.preset_shuffle_threshold = custom_shuffle
+                self.preset_auto_shuffle = True
+        except (ValueError, Exception):
+            pass
+
+        try:
+            parallel_str = self.query_one("#input-proxy-parallel", Input).value.strip()
+            self.slipstream_max_concurrent = max(1, min(10, int(parallel_str))) if parallel_str else 3
+        except (ValueError, Exception):
+            self.slipstream_max_concurrent = 3
+
+        try:
+            os_mtu_str = self.query_one("#input-os-mtu", Input).value.strip()
+            self.os_mtu = max(0, min(1500, int(os_mtu_str))) if os_mtu_str else 0
+        except (ValueError, Exception):
+            self.os_mtu = 0
+
+        try:
+            qs_str = self.query_one("#input-slipnet-query-size", Input).value.strip()
+            raw_qs = int(qs_str) if qs_str else 0
+            # Enforce minimum of 50 if a non-zero value is set
+            self.slipnet_query_size = max(50, raw_qs) if raw_qs > 0 else 0
+        except (ValueError, Exception):
+            self.slipnet_query_size = 0
+
         # Rebuild table columns based on enabled tests
         self._setup_table_columns()
 
-        if not self.domain:
+        if not self.domain and self.active_protocol == "slipstream":
             self.notify("Please enter a domain!", severity="error")
             return
 
@@ -2055,7 +1721,6 @@ class DNSScannerTUI(App):
         import base64
         config = {
             "domain": self.domain,
-            "dns_type": self.dns_type,
             "scan_preset": self.scan_preset,
             "concurrency": self.concurrency,
             "proxy_auth_enabled": self.proxy_auth_enabled,
@@ -2063,13 +1728,32 @@ class DNSScannerTUI(App):
             "proxy_password": base64.b64encode(self.proxy_password.encode("utf-8")).decode("utf-8") if self.proxy_auth_enabled and self.proxy_password else "",
             # slipstream-related flags
             "slipstream_enabled": self.test_slipstream,
+            # Protocol & SlipNet
+            "active_protocol": self.active_protocol,
+            "slipnet_url": self.slipnet_url,
+            "auth_mode": self.auth_mode,
+            "ssh_host": self.ssh_host,
+            "ssh_port": self.ssh_port,
+            "ssh_user": self.ssh_user,
+            "ssh_pass": base64.b64encode(self.ssh_pass.encode("utf-8")).decode("utf-8") if self.ssh_pass else "",
+            # Advanced settings
+            "dns_timeout": self.dns_timeout,
+            "slipstream_timeout": self.slipstream_timeout,
+            "proxy_test_url": self.proxy_test_url,
+            "proxy_success_code": self.proxy_success_code,
+            "proxy_ping_threshold": self.proxy_ping_threshold,
+            "shuffle_threshold": self.preset_shuffle_threshold,
+            "proxy_parallel": self.slipstream_max_concurrent,
+            "os_mtu": self.os_mtu,
+            "slipnet_query_size": self.slipnet_query_size,
         }
         self._save_config(config)
 
-        # Check slipstream version and update if needed
+        # Check tunnel client version and download if needed
         if self.test_slipstream:
+            protocol_name = "SlipNet" if self.active_protocol == "slipnet" else "Slipstream"
             self.notify(
-                "Checking Slipstream client...", severity="information", timeout=2
+                f"Checking {protocol_name} client...", severity="information", timeout=2
             )
             self.run_worker(self._check_update_and_start_scan(), exclusive=True)
             return
@@ -2090,12 +1774,20 @@ class DNSScannerTUI(App):
         log_widget.write("[bold cyan]PYDNS Scanner Log[/bold cyan]")
         log_widget.write(f"[yellow]Subnet file:[/yellow] {self.subnet_file}")
         log_widget.write(f"[yellow]Domain:[/yellow] {self.domain}")
-        log_widget.write(f"[yellow]DNS Type:[/yellow] {self.dns_type}")
+        log_widget.write("[yellow]DNS Types:[/yellow] NS, TXT, RND, DPI, EDNS0, NXD")
         log_widget.write(f"[yellow]Concurrency:[/yellow] {self.concurrency}")
         log_widget.write(f"[yellow]Scan Preset:[/yellow] {self.scan_preset}")
         log_widget.write(
-            f"[yellow]Slipstream Test:[/yellow] {'Enabled' if self.test_slipstream else 'Disabled'}"
+            f"[yellow]Proxy Test:[/yellow] {'Enabled' if self.test_slipstream else 'Disabled'}"
         )
+        log_widget.write(f"[yellow]DNS Timeout:[/yellow] {self.dns_timeout}s")
+        if self.test_slipstream:
+            log_widget.write(f"[yellow]Proxy Timeout:[/yellow] {self.slipstream_timeout}s")
+            log_widget.write(f"[yellow]Proxy Test URL:[/yellow] {self.proxy_test_url}")
+            if self.proxy_ping_threshold == 0:
+                log_widget.write("[yellow]Minimum Ping to Test:[/yellow] all")
+            else:
+                log_widget.write(f"[yellow]Minimum Ping to Test:[/yellow] {self.proxy_ping_threshold}ms")
         # Log enabled extra tests
         enabled_tests = []
         if self.security_test_enabled:
@@ -2108,6 +1800,16 @@ class DNSScannerTUI(App):
             enabled_tests.append("ISP")
         if enabled_tests:
             log_widget.write(f"[yellow]Extra Tests:[/yellow] {', '.join(enabled_tests)}")
+        log_widget.write(
+            "[dim]DNS legend:[/dim] "
+            "[white]F=Found[/white], [green]P=Pass[/green], [red]X=Fail[/red]"
+        )
+        log_widget.write(
+            "[dim]SEC legend:[/dim] "
+            "[bright_green]S=Secure[/bright_green], "
+            "[bright_blue]N=Normal[/bright_blue], "
+            "[orange1]F=Filtered[/orange1]"
+        )
         log_widget.write("[green]Starting scan...[/green]\n")
 
         # Start scanning
@@ -2119,7 +1821,7 @@ class DNSScannerTUI(App):
         self.run_worker(self._scan_async(), exclusive=True)
 
     async def _check_update_and_start_scan(self) -> None:
-        """Check for slipstream updates and then start the scan."""
+        """Check for tunnel client updates and then start the scan."""
         # Rebuild table columns (test toggles already read)
         self._setup_table_columns()
 
@@ -2130,34 +1832,52 @@ class DNSScannerTUI(App):
         # Get log widget AFTER switching to scan screen
         log_widget = self.query_one("#log-display", RichLog)
         log_widget.write("[bold cyan]PYDNS Scanner Log[/bold cyan]")
-        log_widget.write("[cyan]Checking Slipstream client...[/cyan]")
 
-        # Ensure slipstream is installed (download only if not present)
+        # Determine which manager to use based on active protocol
+        if self.active_protocol == "slipnet":
+            manager = self.slipnet_manager
+            protocol_name = "SlipNet"
+        else:
+            manager = self.slipstream_manager
+            protocol_name = "Slipstream"
+
+        log_widget.write(f"[cyan]Checking {protocol_name} client...[/cyan]")
+
+        # Ensure tunnel client is installed (download only if not present)
         def log_callback(msg):
             log_widget.write(msg)
 
-        success, message = await self.slipstream_manager.ensure_installed(log_callback)
+        success, message = await manager.ensure_installed(log_callback)
 
-        # Verify we have a working slipstream
-        if not self.slipstream_manager.is_installed():
-            log_widget.write("[red]✗ Failed to get Slipstream client![/red]")
+        # Verify we have a working client
+        if not manager.is_installed():
+            log_widget.write(f"[red]✗ Failed to get {protocol_name} client![/red]")
             log_widget.write(
                 "[yellow]Please download manually or check your network connection.[/yellow]"
             )
-            self.notify("Slipstream not available", severity="error")
+            self.notify(f"{protocol_name} not available", severity="error")
             return
 
         # Ensure executable permissions
-        self.slipstream_manager.ensure_executable()
-        self.slipstream_path = str(self.slipstream_manager.get_executable_path())
+        manager.ensure_executable()
+        if self.active_protocol == "slipnet":
+            pass  # SlipNet doesn't need a path stored
+        else:
+            self.slipstream_path = str(manager.get_executable_path())
 
         # Continue with scan setup
         log_widget.write(f"[yellow]Subnet file:[/yellow] {self.subnet_file}")
-        log_widget.write(f"[yellow]Domain:[/yellow] {self.domain}")
-        log_widget.write(f"[yellow]DNS Type:[/yellow] {self.dns_type}")
+        if self.active_protocol == "slipnet":
+            log_widget.write(f"[yellow]SlipNet URL:[/yellow] {self.slipnet_url[:40]}...")
+            log_widget.write(f"[yellow]Domain (from config):[/yellow] {self.domain}")
+        else:
+            log_widget.write(f"[yellow]Domain:[/yellow] {self.domain}")
+        log_widget.write("[yellow]DNS Types:[/yellow] NS, TXT, RND, DPI, EDNS0, NXD")
         log_widget.write(f"[yellow]Concurrency:[/yellow] {self.concurrency}")
         log_widget.write(f"[yellow]Scan Preset:[/yellow] {self.scan_preset}")
-        log_widget.write("[yellow]Slipstream Test:[/yellow] Enabled")
+        log_widget.write(f"[yellow]Proxy Test:[/yellow] Enabled ({protocol_name})")
+        if self.active_protocol == "slipstream":
+            log_widget.write(f"[yellow]Auth Mode:[/yellow] {self.auth_mode}")
         # Log enabled extra tests
         enabled_tests = []
         if self.security_test_enabled:
@@ -2189,9 +1909,25 @@ class DNSScannerTUI(App):
         await self._scan_async()
 
     async def _download_and_start_scan(self) -> None:
-        """Download slipstream and then start the scan."""
+        """Download tunnel client and then start the scan."""
         log_widget = self.query_one("#log-display", RichLog)
-        progress_bar = self.query_one("#progress-bar", CustomProgressBar)
+        # Shim: route download progress through the embedded stats bar
+        _stats_ref = self._stats_widget
+
+        class _DownloadProgressShim:
+            def update_progress(self, progress: float, total: float) -> None:
+                if _stats_ref:
+                    _stats_ref.update_stats(bar_progress=float(progress), bar_total=float(total))
+
+        progress_bar = _DownloadProgressShim()
+
+        # Determine which manager to use
+        if self.active_protocol == "slipnet":
+            manager = self.slipnet_manager
+            protocol_name = "SlipNet"
+        else:
+            manager = self.slipstream_manager
+            protocol_name = "Slipstream"
 
         # Switch to scan screen to show progress
         self.query_one("#start-screen").display = False
@@ -2199,29 +1935,33 @@ class DNSScannerTUI(App):
 
         log_widget.write("[bold cyan]PYDNS Scanner Log[/bold cyan]")
         log_widget.write(
-            f"[yellow]Platform:[/yellow] {self.slipstream_manager.system} {self.slipstream_manager.machine}"
+            f"[yellow]Platform:[/yellow] {manager.system} {manager.machine}"
         )
-        log_widget.write("[cyan]Downloading Slipstream client...[/cyan]")
+        log_widget.write(f"[cyan]Downloading {protocol_name} client...[/cyan]")
         log_widget.write(
-            f"[dim]URL: {self.slipstream_manager.get_download_url()}[/dim]"
+            f"[dim]URL: {manager.get_download_url()}[/dim]"
         )
 
-        success = await self.slipstream_manager.download_with_ui(
+        success = await manager.download_with_ui(
             progress_bar=progress_bar,
             log_widget=log_widget,
         )
 
         if success:
-            log_widget.write("[green]✓ Slipstream downloaded successfully![/green]")
+            log_widget.write(f"[green]✓ {protocol_name} downloaded successfully![/green]")
             progress_bar.update_progress(100, 100)  # Show 100%
-            self.slipstream_path = str(self.slipstream_manager.get_executable_path())
+            if self.active_protocol != "slipnet":
+                self.slipstream_path = str(manager.get_executable_path())
 
             # Continue with the scan
             log_widget.write(f"[yellow]Subnet file:[/yellow] {self.subnet_file}")
-            log_widget.write(f"[yellow]Domain:[/yellow] {self.domain}")
-            log_widget.write(f"[yellow]DNS Type:[/yellow] {self.dns_type}")
+            if self.active_protocol == "slipnet":
+                log_widget.write(f"[yellow]SlipNet URL:[/yellow] {self.slipnet_url[:40]}...")
+            else:
+                log_widget.write(f"[yellow]Domain:[/yellow] {self.domain}")
+            log_widget.write("[yellow]DNS Types:[/yellow] NS, TXT, RND, DPI, EDNS0, NXD")
             log_widget.write(f"[yellow]Concurrency:[/yellow] {self.concurrency}")
-            log_widget.write("[yellow]Slipstream Test:[/yellow] Enabled")
+            log_widget.write(f"[yellow]Proxy Test:[/yellow] Enabled ({protocol_name})")
             log_widget.write("[green]Starting scan...[/green]\n")
 
             self.scan_started = True
@@ -2232,10 +1972,10 @@ class DNSScannerTUI(App):
             await self._scan_async()
         else:
             log_widget.write(
-                "[red]✗ Failed to download Slipstream after multiple retries![/red]"
+                f"[red]✗ Failed to download {protocol_name} after multiple retries![/red]"
             )
             log_widget.write(
-                f"[yellow]Expected path: {self.slipstream_manager.get_executable_path()}[/yellow]"
+                f"[yellow]Expected path: {manager.get_executable_path()}[/yellow]"
             )
             log_widget.write(
                 "[yellow]Partial download saved. Run again to resume.[/yellow]"
@@ -2244,11 +1984,215 @@ class DNSScannerTUI(App):
                 "[yellow]Or download manually and place in the path above.[/yellow]"
             )
             self.notify(
-                "Failed to download Slipstream. Run again to resume.", severity="error"
+                f"Failed to download {protocol_name}. Run again to resume.", severity="error"
             )
+
+    def _apply_os_mtu(self) -> None:
+        """Set OS network adapter MTU. Elevates via UAC/pkexec/osascript if not admin."""
+        if not self.os_mtu:
+            return
+        import platform as _platform
+        _sys = _platform.system()
+        try:
+            if _sys == "Windows":
+                self._mtu_op_windows(self.os_mtu, reverting=False)
+            elif _sys == "Linux":
+                self._mtu_op_linux(self.os_mtu, reverting=False)
+            elif _sys == "Darwin":
+                self._mtu_op_mac(self.os_mtu, reverting=False)
+            else:
+                self._log(f"[yellow]⚠ OS MTU change not supported on {_sys}[/yellow]")
+        except Exception as e:
+            self._log(f"[red]Failed to set OS MTU: {e}[/red]")
+            self._original_mtu = 0
+            self._mtu_interface = ""
+
+    def _revert_os_mtu(self) -> None:
+        """Restore OS network adapter MTU to its saved original value."""
+        if not self._original_mtu or not self._mtu_interface:
+            return
+        import platform as _platform
+        _sys = _platform.system()
+        try:
+            if _sys == "Windows":
+                self._mtu_op_windows(self._original_mtu, reverting=True)
+            elif _sys == "Linux":
+                self._mtu_op_linux(self._original_mtu, reverting=True)
+            elif _sys == "Darwin":
+                self._mtu_op_mac(self._original_mtu, reverting=True)
+        except Exception as e:
+            logger.warning(f"Could not revert OS MTU: {e}")
+        finally:
+            self._original_mtu = 0
+            self._mtu_interface = ""
+
+    def _mtu_op_windows(self, mtu: int, reverting: bool) -> None:
+        """Windows MTU apply/revert. Uses PowerShell; triggers UAC if not admin."""
+        import base64
+        import ctypes as _ctypes
+
+        if not reverting:
+            # Discover interface and save original MTU (no admin required)
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-NetIPInterface -AddressFamily IPv4 "
+                 "| Where-Object ConnectionState -eq Connected "
+                 "| Sort-Object InterfaceMetric "
+                 "| Select-Object -First 1 -ExpandProperty InterfaceAlias"],
+                capture_output=True, text=True, timeout=10)
+            iface = r.stdout.strip().strip('"')
+            if not iface:
+                raise ValueError("No connected IPv4 interface found")
+            r2 = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 f"Get-NetIPInterface -InterfaceAlias '{iface}' -AddressFamily IPv4 "
+                 f"| Select-Object -ExpandProperty NlMtu"],
+                capture_output=True, text=True, timeout=10)
+            self._original_mtu = int(r2.stdout.strip())
+            self._mtu_interface = iface
+        else:
+            iface = self._mtu_interface
+
+        set_cmd = (
+            f"Set-NetIPInterface -InterfaceAlias '{iface}' "
+            f"-AddressFamily IPv4 -NlMtuBytes {mtu}"
+        )
+
+        try:
+            is_admin = bool(_ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            is_admin = False
+
+        if is_admin:
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", set_cmd],
+                capture_output=True, text=True, timeout=10)
+            if r.returncode != 0:
+                raise RuntimeError(r.stderr.strip() or r.stdout.strip())
+        else:
+            # Encode command as base64 UTF-16-LE to avoid quoting issues in RunAs
+            b64 = base64.b64encode(set_cmd.encode("utf-16-le")).decode("ascii")
+            uac = (
+                f"Start-Process powershell.exe -Verb RunAs -Wait "
+                f"-ArgumentList '-NoProfile','-EncodedCommand','{b64}'"
+            )
+            r = subprocess.run(
+                ["powershell", "-NoProfile", "-Command", uac],
+                capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                raise RuntimeError("UAC elevation was cancelled or failed")
+
+        if not reverting:
+            self._log(f"[green]OS MTU set to {mtu} on '{iface}' (was {self._original_mtu})[/green]")
+        else:
+            logger.info(f"OS MTU reverted to {mtu} on '{iface}'")
+
+    def _mtu_op_linux(self, mtu: int, reverting: bool) -> None:
+        """Linux MTU apply/revert. Uses pkexec/sudo for elevation."""
+        import os as _os
+        import re as _re
+
+        if not reverting:
+            # Discover active interface via default route
+            r = subprocess.run(["ip", "route", "get", "1.1.1.1"],
+                               capture_output=True, text=True, timeout=5)
+            iface = None
+            toks = r.stdout.split()
+            for i, t in enumerate(toks):
+                if t == "dev" and i + 1 < len(toks):
+                    iface = toks[i + 1]
+                    break
+            if not iface:
+                raise ValueError("Could not determine active network interface")
+            # Save original MTU
+            r2 = subprocess.run(["ip", "link", "show", iface],
+                                capture_output=True, text=True, timeout=5)
+            m = _re.search(r'\bmtu\s+(\d+)', r2.stdout)
+            self._original_mtu = int(m.group(1)) if m else 1500
+            self._mtu_interface = iface
+        else:
+            iface = self._mtu_interface
+
+        if _os.geteuid() == 0:
+            subprocess.run(["ip", "link", "set", iface, "mtu", str(mtu)],
+                           check=True, timeout=10)
+        else:
+            # Try pkexec (GUI PolicyKit dialog on desktop environments)
+            r = subprocess.run(["pkexec", "ip", "link", "set", iface, "mtu", str(mtu)],
+                               capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                # Fallback: passwordless sudo
+                r2 = subprocess.run(["sudo", "ip", "link", "set", iface, "mtu", str(mtu)],
+                                    capture_output=True, text=True, timeout=30)
+                if r2.returncode != 0:
+                    raise RuntimeError("pkexec/sudo failed — run as root or grant permission")
+
+        if not reverting:
+            self._log(f"[green]OS MTU set to {mtu} on '{iface}' (was {self._original_mtu})[/green]")
+        else:
+            logger.info(f"OS MTU reverted to {mtu} on '{iface}'")
+
+    def _mtu_op_mac(self, mtu: int, reverting: bool) -> None:
+        """macOS MTU apply/revert. Uses osascript admin dialog for elevation."""
+        import os as _os
+        import re as _re
+
+        if not reverting:
+            # Discover active interface
+            r = subprocess.run(["route", "get", "default"],
+                               capture_output=True, text=True, timeout=5)
+            iface = None
+            for line in r.stdout.splitlines():
+                if "interface:" in line:
+                    iface = line.split()[-1]
+                    break
+            if not iface:
+                raise ValueError("Could not determine active network interface")
+            # Save original MTU
+            r2 = subprocess.run(["ifconfig", iface],
+                                capture_output=True, text=True, timeout=5)
+            m = _re.search(r'\bmtu\s+(\d+)', r2.stdout)
+            self._original_mtu = int(m.group(1)) if m else 1500
+            self._mtu_interface = iface
+        else:
+            iface = self._mtu_interface
+
+        if _os.geteuid() == 0:
+            subprocess.run(["ifconfig", iface, "mtu", str(mtu)], check=True, timeout=10)
+        else:
+            # osascript asks for admin password via macOS dialog
+            r = subprocess.run(
+                ["osascript", "-e",
+                 f'do shell script "ifconfig {iface} mtu {mtu}" with administrator privileges'],
+                capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                raise RuntimeError(f"Authentication failed or cancelled: {r.stderr.strip()}")
+
+        if not reverting:
+            self._log(f"[green]OS MTU set to {mtu} on '{iface}' (was {self._original_mtu})[/green]")
+        else:
+            logger.info(f"OS MTU reverted to {mtu} on '{iface}'")
 
     async def _scan_async(self) -> None:
         """Async scanning logic with instant shuffle support."""
+        # Open debug log file if debug mode is enabled
+        self._close_debug_log()
+        if self.debug_mode:
+            os.makedirs("logs", exist_ok=True)
+            _dbg_ts = time.strftime("%Y-%m-%d_%H-%M-%S")
+            _dbg_path = f"logs/debug_{_dbg_ts}.log"
+            try:
+                self._debug_log_file = open(_dbg_path, "w", encoding="utf-8", buffering=1)
+                self._debug_log_file.write(f"# PYDNS Scanner Debug Log — {_dbg_ts}\n")
+                self._debug_log_file.write(f"# Domain: {self.domain}\n")
+                self._debug_log_file.write(f"# Protocol: {self.active_protocol}\n")
+                self._debug_log_file.write(f"# Auth mode: {getattr(self, 'auth_mode', 'N/A')}\n")
+                self._debug_log_file.write(f"# Test URL: {getattr(self, 'proxy_test_url', 'N/A')}\n\n")
+                self._log(f"[cyan]Debug log: {_dbg_path}[/cyan]")
+            except Exception as _e:
+                logger.warning(f"Could not open debug log: {_e}")
+                self.debug_mode = False
+
         # Reset state for re-scanning
         self.found_servers.clear()
         self.server_times.clear()
@@ -2265,6 +2209,7 @@ class DNSScannerTUI(App):
         self.isp_results.clear()
         self.resolve_results.clear()
         self.tcp_udp_results.clear()
+        self.dns_types_results.clear()
         self.extra_test_tasks.clear()
         self.extra_test_semaphore = asyncio.Semaphore(5)  # Max 5 concurrent extra tests
         self._isp_rate_lock = asyncio.Lock()  # Serialize ip-api.com requests
@@ -2281,9 +2226,6 @@ class DNSScannerTUI(App):
             limits=httpx.Limits(max_connections=30, max_keepalive_connections=10),
         )
 
-        # Force garbage collection after clearing large structures
-        gc.collect()
-
         # Reset pause state
         self.is_paused = False
         self.pause_event = asyncio.Event()
@@ -2291,6 +2233,13 @@ class DNSScannerTUI(App):
 
         # Initialize shuffle signal
         self.shuffle_signal = asyncio.Event()
+
+        # Ensure ISP cache is built (fetches from ip-api.com if needed)
+        try:
+            await self._ensure_isp_cache()
+        except Exception as e:
+            logger.warning(f"ISP cache build failed: {e}")
+            self._log(f"[yellow]ISP cache unavailable: {e}[/yellow]")
 
         # Initialize shutdown event for graceful cleanup
         self._shutdown_event = asyncio.Event()
@@ -2307,6 +2256,11 @@ class DNSScannerTUI(App):
         self.pending_slipstream_tests.clear()
         self.slipstream_tasks.clear()
 
+        # Apply experimental OS MTU if configured
+        if self.os_mtu:
+            self._apply_os_mtu()
+
+        # Placeholder — real start_time is set just before first IP submission
         self.start_time = time.time()
         self.last_update_time = self.start_time
         self.last_table_update_time = self.start_time
@@ -2314,13 +2268,16 @@ class DNSScannerTUI(App):
         # Start periodic sort refresh timer (every 3 seconds)
         self._sort_refresh_timer = self.set_interval(3.0, self._periodic_sort_refresh)
 
+        # Start periodic stats refresh timer (every 0.5s — smooth speed/scanned display)
+        self._stats_refresh_timer = self.set_interval(0.5, self._tick_stats)
+
         # Notify user about CIDR loading
         self.notify("Reading CIDR file...", severity="information", timeout=3)
         self._log("[cyan]Analyzing CIDR file...[/cyan]")
         await asyncio.sleep(0)
 
         # Fast count of total IPs (not lines) for accurate progress
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         total_ips = await loop.run_in_executor(
             None, self._count_total_ips_fast, self.subnet_file
         )
@@ -2342,15 +2299,16 @@ class DNSScannerTUI(App):
         try:
             stats = self._stats_widget
             if stats is not None:
-                stats.total = effective_total
-            pb = self._progress_bar_widget
-            if pb is not None:
-                pb.update_progress(0, effective_total)
+                stats.update_stats(
+                    total=effective_total,
+                    bar_progress=0.0,
+                    bar_total=float(effective_total),
+                )
         except Exception as e:
             logger.debug(f"Could not initialize stats widget: {e}")
 
         logger.info(f"Starting chunked scan with concurrency {self.concurrency}")
-        self._log("[cyan]Scan mode: Streaming chunks (no pre-loading)[/cyan]")
+        self._log("[cyan]Scan mode: Streaming (no pre-loading)[/cyan]")
         self._log(f"[cyan]Concurrency: {self.concurrency} workers[/cyan]")
         await asyncio.sleep(0)
 
@@ -2359,23 +2317,53 @@ class DNSScannerTUI(App):
 
         self.notify("Scanning in real-time...", severity="information", timeout=3)
 
-        # Create semaphore
+        # ── Create semaphore (same pattern as original) ──
         sem = asyncio.Semaphore(self.concurrency)
-
-        # Windows Selector event loop caps socket monitoring at 64 — warn if over limit
-        import sys as _sys
-        if _sys.platform == "win32" and self.concurrency > 64:
-            self._log(
-                f"[yellow]⚠ Windows select() limit: effective concurrency capped at ~64 sockets "
-                f"(requested {self.concurrency}). Consider lowering concurrency for reliability.[/yellow]"
-            )
 
         self._log("[green]Starting memory-efficient streaming scan...[/green]")
         await asyncio.sleep(0)
 
-        max_outstanding = self.concurrency * 2  # Cap outstanding tasks
-        active_tasks: set = set()
+        # ── Reset start_time NOW so speed metric excludes setup ────────
+        self.start_time = time.time()
+        self.last_update_time = self.start_time
+
+        # Queue-based scheduler: O(1) per result instead of O(N) asyncio.wait.
+        # Each worker task calls put_nowait when it finishes; the main loop
+        # just reads from the queue — no callback-set juggling.
+        max_outstanding = max(self.concurrency * 2, self.concurrency + 64)
+        result_queue: asyncio.Queue = asyncio.Queue()
+        active_tasks_set: set = set()  # kept only for cancel-on-shutdown
+        in_flight: int = 0
         scan_complete = False
+
+        async def _run_test(ip: str) -> None:
+            """Run one DNS probe and push the result tuple to result_queue."""
+            await self.pause_event.wait()
+            try:
+                result = await self._test_dns(ip, sem)
+            except Exception as e:
+                logger.debug(f"DNS test error for {ip}: {e}")
+                result = (ip, False, 0.0)
+            result_queue.put_nowait(result)
+
+        async def _drain_results() -> None:
+            """Process all results already in the queue without blocking."""
+            nonlocal in_flight
+            while not result_queue.empty():
+                r = result_queue.get_nowait()
+                in_flight -= 1
+                await self._process_result(r)
+
+        async def _wait_one() -> None:
+            """Block until exactly one result arrives, then process it."""
+            nonlocal in_flight
+            r = await result_queue.get()
+            in_flight -= 1
+            await self._process_result(r)
+
+        # Disable GC during the hot scan loop to avoid stop-the-world pauses.
+        # We manually collect at natural idle points (shuffle/restart/completion).
+        gc.disable()
 
         # Outer loop: restarts streaming when shuffle is signaled
         while not scan_complete:
@@ -2387,14 +2375,18 @@ class DNSScannerTUI(App):
 
             shuffled = False
 
-            # Stream IPs efficiently without loading all into memory
-            async for ip_chunk in self._stream_ips_from_file():
+            # Choose streaming strategy
+            if self.scan_strategy == "redis":
+                ip_stream = self._stream_ips_redis_style()
+            else:
+                ip_stream = self._stream_ips_from_file()
+
+            # Stream IPs and feed them one-by-one into the task pool.
+            # Backpressure is applied per-IP so progress is smooth & continuous.
+            async for ip_chunk in ip_stream:
                 # Check for shutdown
                 if self._shutdown_event and self._shutdown_event.is_set():
                     break
-
-                # Check for pause
-                await self.pause_event.wait()
 
                 # Check for shuffle signal - break to restart stream with new order
                 if self.shuffle_signal.is_set():
@@ -2402,66 +2394,46 @@ class DNSScannerTUI(App):
                     self._log("[cyan]Reshuffling IP stream order...[/cyan]")
                     break
 
-                # Create tasks for this chunk
                 for ip in ip_chunk:
-                    # Stop creating tasks if preset limit reached
+                    # ── Shutdown / shuffle / pause gates ──
                     if self._shutdown_event and self._shutdown_event.is_set():
                         break
-                    task = asyncio.create_task(self._test_dns_with_callback(ip, sem))
-                    active_tasks.add(task)
-
-                # Keep reference for cleanup
-                self.active_scan_tasks = active_tasks
-
-                # Process completed tasks - keep outstanding tasks capped
-                while len(active_tasks) >= max_outstanding:
-                    # Check for pause before processing
-                    await self.pause_event.wait()
-
-                    # Check for shutdown
-                    if self._shutdown_event and self._shutdown_event.is_set():
-                        break
-
-                    # Check for shuffle signal during processing
                     if self.shuffle_signal.is_set():
                         shuffled = True
                         self._log("[cyan]Reshuffling IP stream order...[/cyan]")
                         break
+                    await self.pause_event.wait()
 
-                    # Wait for some tasks to complete (timeout ensures UI stays responsive)
-                    done, pending = await asyncio.wait(
-                        active_tasks, return_when=asyncio.FIRST_COMPLETED, timeout=0.15
-                    )
+                    # Drain any completed results — O(1) per result, no asyncio.wait
+                    await _drain_results()
 
-                    if not done:
-                        # Timeout - no tasks completed yet, just yield to UI
-                        await asyncio.sleep(0)
-                        continue
+                    # ── Backpressure: wait until there is room for a new task ──
+                    while in_flight >= max_outstanding:
+                        if self._shutdown_event and self._shutdown_event.is_set():
+                            break
+                        if self.shuffle_signal.is_set():
+                            shuffled = True
+                            self._log("[cyan]Reshuffling IP stream order...[/cyan]")
+                            break
+                        await self.pause_event.wait()
+                        await _wait_one()
 
-                    # Process completed results in small batches to prevent UI freeze
-                    done_list = list(done)
-                    batch_size = 5  # Process max 5 results before yielding to UI for better responsiveness
-                    for i, task in enumerate(done_list):
-                        try:
-                            result = await task
-                            await self._process_result(result)
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception as e:
-                            logger.error(
-                                f"Error processing DNS test result: {e}", exc_info=True
-                            )
-                        
-                        # Yield to UI every batch_size results to keep UI responsive
-                        if (i + 1) % batch_size == 0:
-                            await asyncio.sleep(0)
+                    if shuffled or (self._shutdown_event and self._shutdown_event.is_set()):
+                        break
 
-                    active_tasks = pending  # pending is already a set
-                    self.active_scan_tasks = active_tasks
+                    # ── Admit one new task ──
+                    self._current_scanning_ip = ip
+                    task = asyncio.create_task(_run_test(ip))
+                    active_tasks_set.add(task)
+                    task.add_done_callback(active_tasks_set.discard)
+                    self.active_scan_tasks = active_tasks_set
+                    in_flight += 1
 
-                # Break out of async for if shuffle/shutdown detected in processing
+                # Break outer stream if shuffle/shutdown detected
                 if shuffled or (self._shutdown_event and self._shutdown_event.is_set()):
                     break
+
+                await _drain_results()
 
             # Check if shuffle was signaled but stream ended before we caught it
             if not shuffled and self.shuffle_signal.is_set():
@@ -2472,26 +2444,29 @@ class DNSScannerTUI(App):
                 # Stream completed normally (no shuffle interrupt)
                 scan_complete = True
             else:
-                # Shuffle was requested - drain active tasks quickly then restart stream
-                if active_tasks:
-                    self._log(f"[dim]Draining {len(active_tasks)} active tasks before reshuffle...[/dim]")
-                    done, pending = await asyncio.wait(active_tasks, timeout=5.0)
-                    # Process in batches to prevent UI freeze
-                    done_list = list(done)
-                    for i, task in enumerate(done_list):
+                # Shuffle was requested — drain via queue then cancel stragglers
+                if in_flight > 0:
+                    self._log(f"[dim]Draining {in_flight} active tasks before reshuffle...[/dim]")
+                    drain_end = asyncio.get_event_loop().time() + 5.0
+                    while in_flight > 0:
+                        remaining = drain_end - asyncio.get_event_loop().time()
+                        if remaining <= 0:
+                            break
                         try:
-                            result = await task
-                            await self._process_result(result)
-                        except (asyncio.CancelledError, Exception):
-                            pass
-                        # Yield every 5 results for better responsiveness
-                        if (i + 1) % 5 == 0:
-                            await asyncio.sleep(0)
-                    # Cancel remaining tasks that didn't finish in time
-                    for task in pending:
-                        task.cancel()
-                    active_tasks = set()
-                    self.active_scan_tasks = []
+                            r = await asyncio.wait_for(result_queue.get(), timeout=remaining)
+                            in_flight -= 1
+                            await self._process_result(r)
+                        except asyncio.TimeoutError:
+                            break
+                # Cancel tasks still running after timeout
+                for task in list(active_tasks_set):
+                    task.cancel()
+                active_tasks_set.clear()
+                in_flight = 0
+                self.active_scan_tasks = []
+                # Flush any leftover items pushed by tasks before they saw the cancel
+                while not result_queue.empty():
+                    result_queue.get_nowait()
 
                 self._log(
                     f"[cyan]Restarting stream (skipping {len(self.tested_subnets)} completed /24 blocks)[/cyan]"
@@ -2502,35 +2477,40 @@ class DNSScannerTUI(App):
         # Check if we're shutting down
         if self._shutdown_event and self._shutdown_event.is_set():
             self._log("[yellow]Scan interrupted - cleaning up...[/yellow]")
-            # Stop sort refresh timer
+            gc.enable()
+            gc.collect()
             if hasattr(self, "_sort_refresh_timer") and self._sort_refresh_timer:
                 self._sort_refresh_timer.stop()
                 self._sort_refresh_timer = None
+            if hasattr(self, "_stats_refresh_timer") and self._stats_refresh_timer:
+                self._stats_refresh_timer.stop()
+                self._stats_refresh_timer = None
             # Cancel remaining tasks
-            for task in active_tasks:
+            for task in list(active_tasks_set):
                 if not task.done():
                     task.cancel()
+            # Close shared HTTP client on early exit
+            try:
+                await self._http_client.aclose()
+            except Exception:
+                pass
+            self._close_debug_log()
             return
 
-        # Wait for all remaining tasks
+        # Drain all remaining in-flight results from the queue
+        gc.enable()
+        gc.collect()
         self._log("[cyan]Finishing remaining scans...[/cyan]")
-        if active_tasks:
-            done, _ = await asyncio.wait(active_tasks)
-            # Process in batches to prevent UI freeze
-            done_list = list(done)
-            for i, task in enumerate(done_list):
-                try:
-                    result = await task
-                    await self._process_result(result)
-                except asyncio.CancelledError:
-                    pass  # Task was cancelled
-                except Exception as e:
-                    logger.error(
-                        f"Error processing final task result: {e}", exc_info=True
-                    )
-                # Yield every 5 results for better responsiveness
-                if (i + 1) % 5 == 0:
-                    await asyncio.sleep(0)
+        drain_timeout = max(self.dns_timeout * 2, 10.0)
+        while in_flight > 0:
+            try:
+                r = await asyncio.wait_for(result_queue.get(), timeout=drain_timeout)
+                in_flight -= 1
+                await self._process_result(r)
+            except asyncio.TimeoutError:
+                # Guard against tasks that crashed before enqueuing a result
+                if not active_tasks_set or all(t.done() for t in active_tasks_set):
+                    break
 
         self._log(
             f"[cyan]Scan complete. Scanned: {self.current_scanned}, Found: {len(self.found_servers)}[/cyan]"
@@ -2543,6 +2523,9 @@ class DNSScannerTUI(App):
         if hasattr(self, "_sort_refresh_timer") and self._sort_refresh_timer:
             self._sort_refresh_timer.stop()
             self._sort_refresh_timer = None
+        if hasattr(self, "_stats_refresh_timer") and self._stats_refresh_timer:
+            self._stats_refresh_timer.stop()
+            self._stats_refresh_timer = None
 
         # Rebuild table at end to show final sorted results
         self.table_needs_rebuild = True
@@ -2555,18 +2538,19 @@ class DNSScannerTUI(App):
         try:
             stats = self._stats_widget
             if stats is not None:
-                stats.scanned = self.current_scanned
-                stats.found = len(self.found_servers)
-                stats.passed = self._passed_count
-                stats.failed = self._failed_count
-                elapsed = time.time() - self.start_time
-                stats.elapsed = elapsed
-                stats.speed = self.current_scanned / elapsed if elapsed > 0 else 0
-                stats.total = self.current_scanned  # Set total to actual scanned count
-
-            pb = self._progress_bar_widget
-            if pb is not None:
-                pb.update_progress(self.current_scanned, self.current_scanned)  # Force 100%
+                active_paused = self._paused_elapsed
+                elapsed = max(0.0, time.time() - self.start_time - active_paused)
+                stats.update_stats(
+                    scanned=self.current_scanned,
+                    found=len(self.found_servers),
+                    passed=self._passed_count,
+                    failed=self._failed_count,
+                    elapsed=elapsed,
+                    speed=self.current_scanned / elapsed if elapsed > 0 else 0,
+                    total=self.current_scanned,  # Set total to actual scanned count
+                    bar_progress=float(self.current_scanned),
+                    bar_total=float(self.current_scanned),  # Force 100%
+                )
         except Exception as e:
             logger.debug(f"Could not update final statistics: {e}")
 
@@ -2574,45 +2558,63 @@ class DNSScannerTUI(App):
         self.table_needs_rebuild = True
         self._rebuild_table()
 
-        # Wait for all pending slipstream tests to complete (with timeout)
-        if self.test_slipstream and self.slipstream_tasks:
-            num_tasks = len(self.slipstream_tasks)
-            self._log(
-                f"[cyan]Waiting for {num_tasks} slipstream tests to complete (max 60s)...[/cyan]"
-            )
-            try:
-                # Wait maximum 60 seconds for all tests
-                await asyncio.wait_for(
-                    asyncio.gather(*self.slipstream_tasks, return_exceptions=True),
-                    timeout=60.0,
-                )
-            except asyncio.TimeoutError:
-                self._log(
-                    "[yellow]Timeout waiting for slipstream tests - continuing anyway[/yellow]"
-                )
-            self.table_needs_rebuild = True
-            self._rebuild_table()  # Rebuild after all tests complete
-            # Collect garbage after proxy tests complete
-            gc.collect()
-
-        # Wait for extra test tasks to complete
+        # Wait for extra test tasks FIRST — they determine which DNS to skip
         if self.extra_test_tasks:
             num_extra = len(self.extra_test_tasks)
             self._log(
-                f"[cyan]Waiting for {num_extra} extra tests to complete (max 30s)...[/cyan]"
+                f"[cyan]Waiting for {num_extra} extra tests to complete (max 60s)...[/cyan]"
             )
             try:
                 await asyncio.wait_for(
                     asyncio.gather(*self.extra_test_tasks, return_exceptions=True),
-                    timeout=30.0,
+                    timeout=60.0,
                 )
             except asyncio.TimeoutError:
                 self._log("[yellow]Timeout waiting for extra tests[/yellow]")
             self.table_needs_rebuild = True
             self._rebuild_table()
 
+        # Wait for all pending proxy tests to complete
+        if self.test_slipstream and self.slipstream_tasks:
+            proto_name = getattr(self, "active_protocol", "slipstream")
+            num_tasks = len(self.slipstream_tasks)
+            # Scale timeout: each test can take up to proxy_timeout + overhead,
+            # limited by semaphore concurrency.  Give generous per-batch time.
+            per_batch_time = getattr(self, "slipstream_timeout", 15) + 10
+            max_concurrent = getattr(self, "slipstream_max_concurrent", 3)
+            batches = (num_tasks + max_concurrent - 1) // max_concurrent
+            dynamic_timeout = max(120.0, batches * per_batch_time)
+            self._log(
+                f"[cyan]Waiting for {num_tasks} {proto_name} tests to complete "
+                f"(max {dynamic_timeout:.0f}s)...[/cyan]"
+            )
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self.slipstream_tasks, return_exceptions=True),
+                    timeout=dynamic_timeout,
+                )
+            except asyncio.TimeoutError:
+                self._log(
+                    f"[yellow]Timeout waiting for {proto_name} tests[/yellow]"
+                )
+            # Mark any remaining Pending/Testing as Skip so counts add up
+            for ip in list(self.proxy_results):
+                if self.proxy_results[ip] in ("Pending", "Testing"):
+                    self.proxy_results[ip] = "Skip"
+                    self._failed_count += 1
+            self.table_needs_rebuild = True
+            self._rebuild_table()  # Rebuild after all tests complete
+            # Collect garbage after proxy tests complete
+            gc.collect()
+
         # Auto-save results
         self._auto_save_results()
+
+        # Revert OS MTU if we changed it
+        self._revert_os_mtu()
+
+        # Close debug log
+        self._close_debug_log()
 
         self.notify("Scan complete! Results auto-saved.", severity="information")
 
@@ -2621,219 +2623,6 @@ class DNSScannerTUI(App):
             await self._http_client.aclose()
         except Exception:
             pass
-
-    def _count_total_ips_fast(self, filepath: str) -> int:
-        """Fast counting of total IPs in CIDR file without loading into memory.
-
-        This provides an accurate count for progress tracking without memory overhead.
-        """
-        total_ips = 0
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#"):
-                        try:
-                            network = ipaddress.IPv4Network(line, strict=False)
-                            # Count actual host IPs (excluding network/broadcast for subnets)
-                            if network.prefixlen >= 31:  # /31 or /32
-                                total_ips += network.num_addresses
-                            else:
-                                total_ips += (
-                                    network.num_addresses - 2
-                                )  # Exclude network & broadcast
-                        except (
-                            ipaddress.AddressValueError,
-                            ipaddress.NetmaskValueError,
-                            ValueError,
-                        ):
-                            logger.debug(f"Skipping invalid CIDR line: {line[:50]}")
-        except (OSError, IOError) as e:
-            logger.error(f"Failed to read CIDR file '{filepath}': {e}")
-            return 0
-        except Exception as e:
-            logger.error(
-                f"Unexpected error counting IPs in file '{filepath}': {e}",
-                exc_info=True,
-            )
-            return 0
-
-        return total_ips
-
-    def _count_file_lines(self, filepath: str) -> int:
-        """Fast line counting for CIDR file."""
-        count = 0
-        try:
-            with open(filepath, "rb") as f:
-                for line in f:
-                    line_str = line.strip()
-                    if line_str and not line_str.startswith(b"#"):
-                        count += 1
-        except (OSError, IOError) as e:
-            logger.debug(f"Failed to count lines in '{filepath}': {e}")
-        return count
-
-    def _load_subnets(self) -> list[ipaddress.IPv4Network]:
-        """Load subnets from file using fast mmap-based reading."""
-        subnets = []
-        logger.info(f"Loading subnets from {self.subnet_file}")
-        try:
-            # Fast reading using mmap for large files
-            with open(self.subnet_file, "r+b") as f:
-                with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mmapped:
-                    for line in iter(mmapped.readline, b""):
-                        try:
-                            line_str = line.decode("utf-8", errors="ignore").strip()
-                            if line_str and not line_str.startswith("#"):
-                                subnets.append(
-                                    ipaddress.IPv4Network(line_str, strict=False)
-                                )
-                        except (
-                            ipaddress.AddressValueError,
-                            ipaddress.NetmaskValueError,
-                            ValueError,
-                        ) as e:
-                            logger.debug(
-                                f"Skipping invalid CIDR: {line_str[:50]} - {e}"
-                            )
-        except (ValueError, OSError, mmap.error) as e:
-            logger.warning(
-                f"mmap failed for '{self.subnet_file}': {e}, falling back to regular reading"
-            )
-            # Fallback to regular reading if mmap fails (e.g., empty file)
-            try:
-                with open(self.subnet_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and not line.startswith("#"):
-                            try:
-                                subnets.append(
-                                    ipaddress.IPv4Network(line, strict=False)
-                                )
-                            except (
-                                ipaddress.AddressValueError,
-                                ipaddress.NetmaskValueError,
-                                ValueError,
-                            ) as e:
-                                logger.debug(
-                                    f"Skipping invalid CIDR: {line[:50]} - {e}"
-                                )
-            except (OSError, IOError) as e:
-                logger.error(f"Failed to read subnet file '{self.subnet_file}': {e}")
-
-        logger.info(f"Loaded {len(subnets)} subnets")
-        return subnets
-
-    async def _stream_ips_from_file(self) -> AsyncGenerator[list[str], None]:
-        """Stream IPs from CIDR file in chunks without loading everything into memory.
-
-        Memory-efficient streaming approach. Skips /24 blocks already in
-        self.tested_subnets so reshuffled streams don't re-scan completed blocks.
-        Each yielded chunk comes from a single /24 block which is marked as tested.
-        """
-        chunk = []
-        chunk_size = 500  # Yield 500 IPs at a time
-        max_ips = self.preset_max_ips  # 0 = unlimited
-        rng = secrets.SystemRandom()
-
-        loop = asyncio.get_event_loop()
-
-        def read_and_process():
-            """Blocking function to read file and yield subnet chunks."""
-            subnets = []
-            try:
-                with open(self.subnet_file, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and not line.startswith("#"):
-                            try:
-                                subnet = ipaddress.IPv4Network(line, strict=False)
-                                subnets.append(subnet)
-                            except (
-                                ipaddress.AddressValueError,
-                                ipaddress.NetmaskValueError,
-                                ValueError,
-                            ):
-                                pass
-            except (OSError, IOError) as e:
-                logger.error(f"Failed to read subnet file: {e}")
-            return subnets
-
-        # Read subnets (small list, not individual IPs)
-        subnets = await loop.run_in_executor(None, read_and_process)
-        rng.shuffle(subnets)
-
-        # Generate IPs from subnets - stream them efficiently
-        for net in subnets:
-            # Stop streaming if shutdown was requested (preset limit reached)
-            if self._shutdown_event and self._shutdown_event.is_set():
-                break
-
-            # Split into /24 chunks
-            if net.prefixlen >= 24:
-                chunks_24 = [net]
-            else:
-                chunks_24 = list(net.subnets(new_prefix=24))
-
-            rng.shuffle(chunks_24)
-
-            for subnet_chunk in chunks_24:
-                # Skip already-tested /24 blocks (from previous shuffle iterations)
-                subnet_key = str(subnet_chunk.network_address)
-                if subnet_key in self.tested_subnets:
-                    continue
-
-                # Generate IPs for this /24
-                if subnet_chunk.num_addresses == 1:
-                    chunk.append(str(subnet_chunk.network_address))
-                    self.total_ips_yielded += 1
-                else:
-                    # Integer-range shuffle — no IPv4Address object allocation per host
-                    net_int = int(subnet_chunk.network_address)
-                    if subnet_chunk.prefixlen >= 31:
-                        # /31: both addresses are valid hosts; /32 is handled above
-                        addr_count = subnet_chunk.num_addresses
-                        indices = list(range(addr_count))
-                        rng.shuffle(indices)
-                        for idx in indices:
-                            chunk.append(str(ipaddress.IPv4Address(net_int + idx)))
-                            self.total_ips_yielded += 1
-                            if max_ips > 0 and self.total_ips_yielded >= max_ips:
-                                break
-                    else:
-                        host_count = subnet_chunk.num_addresses - 2  # exclude network + broadcast
-                        start_int = net_int + 1
-                        for idx in rng.sample(range(host_count), host_count):
-                            chunk.append(str(ipaddress.IPv4Address(start_int + idx)))
-                            self.total_ips_yielded += 1
-                            # Stop generating if preset limit reached
-                            if max_ips > 0 and self.total_ips_yielded >= max_ips:
-                                break
-
-                # Mark this /24 as tested
-                self.tested_subnets.add(subnet_key)
-
-                # Yield chunk when it reaches size
-                if len(chunk) >= chunk_size:
-                    yield chunk
-                    chunk = []
-                    await asyncio.sleep(0)  # Yield to event loop
-
-                # Stop streaming if preset limit reached
-                if max_ips > 0 and self.total_ips_yielded >= max_ips:
-                    if chunk:
-                        yield chunk
-                    return
-
-            # Check preset limit at subnet level too
-            if max_ips > 0 and self.total_ips_yielded >= max_ips:
-                if chunk:
-                    yield chunk
-                return
-
-        # Yield remaining IPs
-        if chunk:
-            yield chunk
 
     async def _test_dns_with_callback(
         self, ip: str, sem: asyncio.Semaphore
@@ -2845,11 +2634,18 @@ class DNSScannerTUI(App):
 
     async def _process_result(self, result: tuple[str, bool, float]) -> None:
         """Process a single DNS test result."""
+        # Block result processing while paused so UI appears frozen
+        await self.pause_event.wait()
         if isinstance(result, tuple):
             ip, is_valid, response_time = result
 
             # Update scanned count (no longer tracking tested_ips for memory efficiency)
             self.current_scanned += 1
+
+            # Periodic garbage collection to prevent memory buildup
+            # (GC is disabled during the hot scan loop for performance)
+            if self.current_scanned % 500 == 0:
+                gc.collect()
 
             if is_valid:
                 # Reset auto-shuffle counter when DNS found
@@ -2860,13 +2656,24 @@ class DNSScannerTUI(App):
                 self._log(
                     f"[green]✓ Found DNS: {ip} ({response_time*1000:.0f}ms)[/green]"
                 )
+                self._debug_log(f"DNS_FOUND ip={ip} ping_ms={response_time*1000:.2f}")
+                ping = f'{response_time*1000:.0f}'
 
                 # Queue slipstream test if enabled (non-blocking)
-                if self.test_slipstream:
-                    self.proxy_results[ip] = "Pending"
-                    task = asyncio.create_task(self._queue_slipstream_test(ip))
-                    self.slipstream_tasks.add(task)
-                    task.add_done_callback(self.slipstream_tasks.discard)
+                should_test_proxy = (
+                    self.proxy_ping_threshold == 0
+                    or int(ping) <= self.proxy_ping_threshold
+                )
+                if self.test_slipstream and should_test_proxy:
+                    # Dedup: skip if already pending/testing/done for this IP
+                    if ip in self.proxy_results and self.proxy_results[ip] in ("Pending", "Testing", "Pass", "Fail"):
+                        self._debug_log(f"PROXY_TEST_SKIP_DUPLICATE ip={ip} status={self.proxy_results[ip]}")
+                    else:
+                        self.proxy_results[ip] = "Pending"
+                        self._debug_log(f"PROXY_TEST_QUEUED ip={ip} ping_ms={ping}")
+                        task = asyncio.create_task(self._queue_slipstream_test(ip))
+                        self.slipstream_tasks.add(task)
+                        task.add_done_callback(self.slipstream_tasks.discard)
 
                 # Queue extra tests if enabled (non-blocking)
                 self._queue_extra_tests(ip)
@@ -2914,76 +2721,46 @@ class DNSScannerTUI(App):
                 if self._shutdown_event:
                     self._shutdown_event.set()
 
-            # Update UI periodically with time-based throttling to prevent UI freeze
+            # Stats updates are handled by the _tick_stats timer (0.5s interval)
+            # Also do inline updates every 10 IPs or 0.1s for immediate feedback
             current_time = time.time()
-            # Update every 10 IPs OR every 0.1 seconds, whichever comes first
             should_update = (
                 self.current_scanned % 10 == 0 or
                 (current_time - self.last_update_time) >= 0.1
             )
-
             if should_update:
-                elapsed = current_time - self.start_time
+                active_paused = self._paused_elapsed
+                elapsed = max(0.0, current_time - self.start_time - active_paused)
                 self.last_update_time = current_time
-
                 try:
+                    secure_cnt, normal_cnt, filtered_cnt = self._get_security_summary_counts()
                     stats = self._stats_widget
                     if stats is not None:
-                        # Direct update (batch_update context manager not available on Static)
-                        stats.scanned = self.current_scanned
-                        stats.elapsed = elapsed
-                        stats.speed = self.current_scanned / elapsed if elapsed > 0 else 0
-                        stats.found = len(self.found_servers)
-                        stats.passed = self._passed_count
-                        stats.failed = self._failed_count
-
-                    pb = self._progress_bar_widget
-                    if pb is not None:
-                        pb.update_progress(self.current_scanned, stats.total if stats else 0)
+                        stats.update_stats(
+                            scanned=self.current_scanned,
+                            elapsed=elapsed,
+                            speed=self.current_scanned / elapsed if elapsed > 0 else 0,
+                            found=len(self.found_servers),
+                            passed=self._passed_count,
+                            failed=self._failed_count,
+                            secure=secure_cnt,
+                            normal=normal_cnt,
+                            filtered=filtered_cnt,
+                            current_ip=self._current_scanning_ip,
+                            current_range=self._current_scanning_range,
+                            bar_progress=float(self.current_scanned),
+                            bar_total=float(stats.total),
+                        )
                 except Exception as e:
                     logger.debug(f"Could not update stats during scan: {e}")
 
-            # Yield to UI event loop after each result to keep UI responsive
+            # Yield to UI event loop after each result
             await asyncio.sleep(0)
-
-    def _collect_ips(self, subnets: list[ipaddress.IPv4Network]) -> list[str]:
-        """Collect all IPs from subnets in random order using CSPRNG."""
-        logger.info(f"Collecting IPs from {len(subnets)} subnets")
-        all_ips = []
-        rng = secrets.SystemRandom()  # Cryptographically secure RNG
-
-        # Shuffle subnets first for randomization
-        subnets_copy = list(subnets)
-        rng.shuffle(subnets_copy)
-
-        for net in subnets_copy:
-            # Split into /24 chunks
-            if net.prefixlen >= 24:
-                chunks = [net]
-            else:
-                chunks = list(net.subnets(new_prefix=24))
-
-            # Shuffle chunks for random order
-            rng.shuffle(chunks)
-
-            for chunk in chunks:
-                # For /32 (single IP), just use the network address
-                if chunk.num_addresses == 1:
-                    all_ips.append(str(chunk.network_address))
-                else:
-                    # Get usable IPs (skip network and broadcast)
-                    ips = list(chunk.hosts())
-                    # Shuffle IPs within each chunk
-                    rng.shuffle(ips)
-                    all_ips.extend([str(ip) for ip in ips])
-
-        logger.info(f"Collected {len(all_ips)} IPs to scan")
-        return all_ips
 
     async def _test_dns(
         self, ip: str, sem: asyncio.Semaphore
     ) -> tuple[str, bool, float]:
-        """Test if IP is a DNS server that responds (even if answer is empty)."""
+        """Test if IP is a DNS server using dnspython (inline async)."""
         async with sem:
             try:
                 domain = self.domain
@@ -2991,873 +2768,101 @@ class DNSScannerTUI(App):
                     prefix = random.randbytes(4).hex()
                     domain = f"{prefix}.{domain}"
 
-                # 2 second timeout for DNS servers
-                resolver = aiodns.DNSResolver(nameservers=[ip], timeout=2.0, tries=1)
+                resolver = dns.asyncresolver.Resolver(configure=False)
+                resolver.nameservers = [ip]
+                resolver.timeout = self.dns_timeout
+                resolver.lifetime = self.dns_timeout
 
                 start = time.time()
                 try:
-                    # Use query method instead of query_dns for better compatibility
-                    result = await resolver.query(domain, self.dns_type)
+                    await resolver.resolve(domain, self.dns_type)
+                    # Any return (including empty answer) means the server responded.
+                    # Do NOT re-check elapsed here: dnspython already enforced
+                    # resolver.lifetime internally.  Re-checking wall-clock time
+                    # causes false-negatives at high concurrency because event-loop
+                    # scheduling delays inflate the measured elapsed beyond the
+                    # configured timeout even though the network round-trip was fine.
                     elapsed = time.time() - start
-
-                    # If we got a result (even empty list means valid server response) and it's under 2000ms
-                    # An empty list [] means "No records found" but the server DID respond successfully.
-                    if (result is not None) and elapsed < 2.0:
-                        logger.debug(
-                            f"{ip}: DNS responded - {type(result)} in {elapsed*1000:.0f}ms"
-                        )
-                        return (ip, True, elapsed)
-                    elif result is not None:
-                        # Too slow, reject it
-                        logger.debug(f"{ip}: DNS too slow - {elapsed*1000:.0f}ms")
-                        return (ip, False, 0)
-
-                    # No response
-                    return (ip, False, 0)
-
-                except aiodns.error.DNSError as dns_err:
+                    return (ip, True, elapsed)
+                except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+                    # Server responded with a DNS error — it IS a DNS server.
                     elapsed = time.time() - start
-                    # DNS errors like NXDOMAIN, NODATA, etc. mean the DNS server IS working
-                    # Only connection/timeout errors mean it's not a valid DNS server
-                    error_code = dns_err.args[0] if dns_err.args else 0
-
-                    # Error codes that indicate a working DNS server:
-                    # 1 = NXDOMAIN (domain doesn't exist - but DNS is working!)
-                    # 4 = NODATA (no records found - but DNS is working!)
-                    # 3 = NXRRSET (RR type doesn't exist - but DNS is working!)
-                    if error_code in (1, 3, 4) and elapsed < 2.0:
-                        logger.info(
-                            f"{ip}: DNS working with error code {error_code} in {elapsed*1000:.0f}ms"
-                        )
+                    return (ip, True, elapsed)
+                except dns.resolver.NoNameservers as e:
+                    # Server sent FORMERR / NOTIMP / SERVFAIL — still alive.
+                    elapsed = time.time() - start
+                    errors = getattr(e, "errors", None) or []
+                    if any(len(x) > 4 and x[4] is not None for x in errors):
                         return (ip, True, elapsed)
-                    elif error_code in (1, 3, 4):
-                        # Working but too slow
-                        return (ip, False, 0)
+                    return (ip, False, 0.0)
+                except (dns.exception.Timeout, asyncio.TimeoutError):
+                    return (ip, False, 0.0)
 
-                    # Other DNS errors = not a valid/working DNS server
-                    return (ip, False, 0)
+            except Exception as exc:
+                logger.debug(f"Unexpected error testing DNS {ip}: {exc}")
+                return (ip, False, 0.0)
 
-            except asyncio.TimeoutError:
-                return (ip, False, 0)
-            except Exception as e:
-                # Log unexpected errors but don't crash the scan
-                logger.debug(f"Unexpected error testing DNS {ip}: {e}")
-                return (ip, False, 0)
-
-    def _add_result(self, ip: str, response_time: float) -> None:
-        """Add a found server to the unified result table immediately."""
-        self.found_servers.add(ip)
-        self.server_times[ip] = response_time
+    def _get_security_summary_counts(self) -> tuple[int, int, int]:
+        """Return (secure, normal, filtered) counts from security test results."""
+        secure = 0
+        normal = 0
+        filtered = 0
 
         try:
-            time_str = self._format_time(response_time)
+            for sec in self.security_results.values():
+                if not isinstance(sec, dict):
+                    continue
+                if sec.get("filtered"):
+                    filtered += 1
+                elif sec.get("dnssec") and not sec.get("hijacked"):
+                    secure += 1
+                else:
+                    normal += 1
+        except Exception:
+            pass
 
-            # Build unified row
-            row = [ip, time_str]
-            if self.test_slipstream:
-                row.append(self._get_proxy_str(ip))
-            row.extend([
-                self._get_ipver_column(ip),
-                self._get_security_column(ip), self._get_tcp_udp_column(ip),
-                self._get_edns0_column(ip),
-                self._get_resolve_column(ip),
-                self._get_isp_column(ip),
-            ])
+        return secure, normal, filtered
 
-            table = self.query_one("#results-table", DataTable)
-            table.add_row(*row, key=ip)
-        except Exception as e:
-            logger.debug(f"Could not add result row to table: {e}")
-
-    def _get_proxy_str(self, ip: str) -> str:
-        """Get formatted proxy status string."""
-        proxy_status = self.proxy_results.get(ip, "N/A")
-        if proxy_status == "Success":
-            return "[green]Passed[/green]"
-        elif proxy_status == "Failed":
-            return "[red]Failed[/red]"
-        elif proxy_status == "Testing":
-            return "[yellow]Testing...[/yellow]"
-        elif proxy_status == "Pending":
-            return "[dim]Queued[/dim]"
-        return "[dim]N/A[/dim]"
-
-    def _get_ipver_column(self, ip: str) -> str:
-        """Get IPv4/IPv6 support for table column."""
-        proto = self.protocol_results.get(ip, {})
-        if ip not in self.protocol_results:
-            return "[dim]Testing...[/dim]"
-        if proto.get("ipv6"):
-            return "[green]IPv4/IPv6[/green]"
-        return "[cyan]IPv4[/cyan]"
-
-    def _update_table_row(self, ip: str) -> None:
-        """Update individual cells in the table for the given IP (no rebuild)."""
-        try:
-            table = self.query_one("#results-table", DataTable)
-            if ip in table._row_locations:
-                if self.test_slipstream:
-                    table.update_cell(ip, "proxy", self._get_proxy_str(ip))
-                table.update_cell(ip, "ipver", self._get_ipver_column(ip))
-                table.update_cell(ip, "isp", self._get_isp_column(ip))
-                table.update_cell(ip, "security", self._get_security_column(ip))
-                table.update_cell(ip, "tcpudp", self._get_tcp_udp_column(ip))
-                table.update_cell(ip, "resolved", self._get_resolve_column(ip))
-                table.update_cell(ip, "edns0", self._get_edns0_column(ip))
-        except Exception as e:
-            logger.debug(f"Could not update table row for {ip}: {e}")
-
-    def _rebuild_table(self) -> None:
-        """Rebuild unified table with default sort (finalized IPs first, sorted by ping)."""
-        if not self.table_needs_rebuild:
+    def _tick_stats(self) -> None:
+        """Periodic stats refresh for smooth speed/scanned display."""
+        if not hasattr(self, "start_time") or self.start_time <= 0:
             return
-
+        # Freeze speed and elapsed when paused
+        if self.is_paused:
+            return
         try:
-            ips = list(self.server_times.keys())
-            finalized = [ip for ip in ips if self._is_ip_finalized(ip)]
-            testing = [ip for ip in ips if not self._is_ip_finalized(ip)]
-
-            # Sort: 1) proxy Success first (if enabled), 2) DNSSEC, 3) ping ascending
-            def _sort_key(ip):
-                proxy_rank = 0 if (self.test_slipstream and self.proxy_results.get(ip) == "Success") else (1 if self.test_slipstream else 0)
-                dnssec_rank = 0 if self.security_results.get(ip, {}).get("dnssec") else 1
-                return (proxy_rank, dnssec_rank, self.server_times.get(ip, 9999.0))
-            sorted_final = sorted(finalized, key=_sort_key)
-            sorted_testing = sorted(testing, key=_sort_key)
-
-            # Rebuild unified table
-            table = self.query_one("#results-table", DataTable)
-            # Save scroll position before clearing
-            scroll_x = table.scroll_x
-            scroll_y = table.scroll_y
-            
-            table.clear(columns=True)
-            for label, key, width in self._get_table_columns():
-                table.add_column(label, key=key, width=width)
-            table.cursor_type = "row"
-
-            for ip in sorted_final + sorted_testing:
-                row = [ip, self._format_time(self.server_times[ip])]
-                if self.test_slipstream:
-                    row.append(self._get_proxy_str(ip))
-                row.extend([
-                    self._get_ipver_column(ip),
-                    self._get_security_column(ip), self._get_tcp_udp_column(ip),
-                    self._get_edns0_column(ip),
-                    self._get_resolve_column(ip),
-                    self._get_isp_column(ip),
-                ])
-                table.add_row(*row, key=ip)
-
-            # Restore scroll position
-            table.scroll_x = scroll_x
-            table.scroll_y = scroll_y
-
-            self.table_needs_rebuild = False
-        except Exception as e:
-            logger.debug(f"Could not rebuild results table: {e}")
-
-    def _is_ip_finalized(self, ip: str) -> bool:
-        """Check if all enabled extra tests have completed for this IP."""
-        # TCP/UDP is always tested for found servers
-        if ip not in self.tcp_udp_results:
-            return False
-        if self.security_test_enabled and ip not in self.security_results:
-            return False
-        if self.isp_info_enabled and ip not in self.isp_results:
-            return False
-        proto = self.protocol_results.get(ip, {})
-        if self.ipv6_test_enabled and "ipv6" not in proto:
-            return False
-        if ip not in self.resolve_results:
-            return False
-        if self.edns0_test_enabled and "edns0" not in proto:
-            return False
-        if self.test_slipstream and self.proxy_results.get(ip) in ("Pending", "Testing"):
-            return False
-        return True
+            active_paused = self._paused_elapsed
+            elapsed = max(0.0, time.time() - self.start_time - active_paused)
+            secure_cnt, normal_cnt, filtered_cnt = self._get_security_summary_counts()
+            stats = self._stats_widget
+            if stats is not None:
+                total = stats.total
+                stats.update_stats(
+                    scanned=self.current_scanned,
+                    elapsed=elapsed,
+                    speed=self.current_scanned / elapsed if elapsed > 0 else 0,
+                    found=len(self.found_servers),
+                    passed=self._passed_count,
+                    failed=self._failed_count,
+                    secure=secure_cnt,
+                    normal=normal_cnt,
+                    filtered=filtered_cnt,
+                    current_ip=getattr(self, "_current_scanning_ip", ""),
+                    current_range=getattr(self, "_current_scanning_range", ""),
+                    bar_progress=float(self.current_scanned),
+                    bar_total=float(total),
+                )
+        except Exception:
+            pass
 
     def _periodic_sort_refresh(self) -> None:
-        """Periodically rebuild tables to maintain sort order during active scan."""
-        if self.found_servers and not self.is_paused:
-            self.table_needs_rebuild = True
-            self._rebuild_table()
-
-    def _format_time(self, response_time: float) -> str:
-        """Format response time with color."""
-        ms = response_time * 1000
-        if ms < 100:
-            return f"[green]{ms:.0f}ms[/green]"
-        elif ms < 300:
-            return f"[yellow]{ms:.0f}ms[/yellow]"
-        return f"[red]{ms:.0f}ms[/red]"
-
-    async def _queue_slipstream_test(self, dns_ip: str) -> None:
-        """Queue and run slipstream test with semaphore for max concurrent tests."""
-        async with self.slipstream_semaphore:
-            # Get an available port
-            while not self.available_ports:
-                await asyncio.sleep(0.1)  # Wait for a port to become available
-
-            port = self.available_ports.popleft()
-
-            try:
-                self.proxy_results[dns_ip] = "Testing"
-                self._update_table_row(dns_ip)  # Update UI to show testing status
-                self._log(
-                    f"[cyan]Testing {dns_ip} with slipstream on port {port}...[/cyan]"
-                )
-
-                result = await self._test_slipstream_proxy(dns_ip, port)
-                self.proxy_results[dns_ip] = result
-
-                # Update pass/fail counters and stats
-                if result == "Success":
-                    self._passed_count += 1
-                elif result == "Failed":
-                    self._failed_count += 1
-                try:
-                    stats = self._stats_widget
-                    if stats is not None:
-                        stats.passed = self._passed_count
-                        stats.failed = self._failed_count
-                except Exception as e:
-                    logger.debug(f"Could not update stats after proxy test: {e}")
-
-                if result == "Success":
-                    self._log(f"[green]✓ Proxy test PASSED: {dns_ip}[/green]")
-                    # Play bell sound if enabled
-                    if self.bell_sound_enabled:
-                        self._play_bell_sound()
-                else:
-                    self._log(f"[red]✗ Proxy test FAILED: {dns_ip}[/red]")
-                    self.table_needs_rebuild = True  # Will rebuild on pause/completion
-
-                self._update_table_row(dns_ip)  # Update UI with final result
-
-            finally:
-                # Return port to pool
-                self.available_ports.append(port)
-
-
-    async def _test_slipstream_proxy(self, dns_ip: str, port: int) -> str:
-        """Test DNS server using slipstream proxy on a specific port.
-
-        Args:
-            dns_ip: The DNS IP to test
-            port: The port to use for slipstream
-
-        Returns:
-            "Success" if proxy works, "Failed" otherwise
-        """
-        process = None
-        self._log(f"[dim]Starting proxy test for {dns_ip} on port {port}…[/dim]")
+        """Periodic full table rebuild for sorted display."""
         try:
-            # Build slipstream command with dynamic port using the manager
-            cmd = self.slipstream_manager.get_run_command(
-                dns_ip, port, self.slipstream_domain
-            )
-
-            logger.info(f"[{dns_ip}] Starting slipstream on port {port}")
-            logger.debug(f"[{dns_ip}] Command: {' '.join(cmd)}")
-
-            # asyncio.create_subprocess_exec is NOT supported on Windows with
-            # WindowsSelectorEventLoopPolicy (required by aiodns).  Run the
-            # blocking Popen + stdout-read in a thread instead.
-            process, connection_ready, output_lines = await asyncio.to_thread(
-                _run_slipstream_sync, cmd, 15.0
-            )
-
-            logger.debug(f"[{dns_ip}] Slipstream thread returned, PID={process.pid}, "
-                         f"connection_ready={connection_ready}, lines={len(output_lines)}")
-
-            # Surface output lines to TUI log and file logger
-            for line in output_lines:
-                logger.debug(f"[{dns_ip}] Slipstream: {line}")
-                if "Listening on TCP port" in line:
-                    self._log(f"[dim]{dns_ip}: {markup_escape(line)}[/dim]")
-                elif "WARN" in line or "ERR" in line:
-                    self._log(f"[yellow]{dns_ip}: {markup_escape(line)}[/yellow]")
-
-            # Track process for cleanup on quit
-            self.slipstream_processes.append(process)
-
-            if not connection_ready:
-                if not output_lines:
-                    logger.warning(f"[{dns_ip}] Slipstream produced no output")
-                    self._log(f"[red]{dns_ip}: slipstream produced no output (crashed?)[/red]")
-                else:
-                    logger.warning(f"[{dns_ip}] Slipstream connection timeout after 15s")
-                    self._log(
-                        f"[yellow]{dns_ip}: No tunnel established via this DNS (15s timeout)[/yellow]"
-                    )
-                return "Failed"
-
-            logger.info(f"[{dns_ip}] Connection ready detected on port {port}")
-            self._log(f"[cyan]{dns_ip}: Connection ready on port {port}[/cyan]")
-
-            # Give slipstream a moment to fully initialize the proxy listener
-            # This prevents race conditions where "Connection ready" is printed
-            # but the proxy isn't quite ready to accept connections yet
-            logger.debug(f"[{dns_ip}] Waiting 2.5s for proxy to fully initialize")
-            await asyncio.sleep(2.5)
-
-            test_success = False
-
-            # Build SOCKS5 URL too (for independent parallel attempt)
-            if self.proxy_auth_enabled and self.proxy_username:
-                from urllib.parse import quote
-                encoded_user = quote(self.proxy_username, safe="")
-                encoded_pass = quote(self.proxy_password, safe="")
-                proxy_url = f"http://{encoded_user}:{encoded_pass}@127.0.0.1:{port}"
-                proxy_url_log = f"http://{self.proxy_username}:****@127.0.0.1:{port}"
-                socks5_url = f"socks5://{encoded_user}:{encoded_pass}@127.0.0.1:{port}"
-                socks5_url_log = f"socks5://{self.proxy_username}:****@127.0.0.1:{port}"
-            else:
-                proxy_url = f"http://127.0.0.1:{port}"
-                proxy_url_log = proxy_url
-                socks5_url = f"socks5://127.0.0.1:{port}"
-                socks5_url_log = socks5_url
-
-            # Use HTTPS (CONNECT tunnel) — slipstream is a tunnel proxy, not a plain-HTTP forwarder.
-            # CONNECT is universally supported; plain HTTP forwarding often isn't.
-            TEST_URL = "https://www.google.com"
-
-            # Try HTTP proxy (via CONNECT tunnel)
-            logger.info(f"[{dns_ip}] Testing HTTP proxy (CONNECT) at {proxy_url_log}")
-            try:
-                async with httpx.AsyncClient(
-                    proxy=proxy_url,
-                    timeout=15.0,
-                    follow_redirects=True,
-                    verify=False,
-                ) as client:
-                    start_time = time.time()
-                    response = await client.get(TEST_URL)
-                    elapsed = time.time() - start_time
-                    logger.debug(f"[{dns_ip}] HTTP proxy status={response.status_code} in {elapsed:.2f}s")
-                    if response.status_code in (200, 301, 302, 307, 308):
-                        test_success = True
-                        logger.info(f"[{dns_ip}] HTTP proxy test PASSED (status {response.status_code}, {elapsed:.2f}s)")
-                        self._log(f"[green]{dns_ip}: HTTP proxy test passed (status {response.status_code})[/green]")
-                    else:
-                        logger.warning(f"[{dns_ip}] HTTP proxy unexpected status: {response.status_code}")
-            except Exception as http_err:
-                logger.warning(f"[{dns_ip}] HTTP proxy test failed: {type(http_err).__name__}: {http_err}")
-
-            # Try SOCKS5 proxy independently (not just as fallback)
-            if not test_success:
-                logger.info(f"[{dns_ip}] Testing SOCKS5 proxy at {socks5_url_log}")
-                try:
-                    async with httpx.AsyncClient(
-                        proxy=socks5_url,
-                        timeout=15.0,
-                        follow_redirects=True,
-                        verify=False,
-                    ) as client:
-                        start_time = time.time()
-                        response = await client.get(TEST_URL)
-                        elapsed = time.time() - start_time
-                        logger.debug(f"[{dns_ip}] SOCKS5 proxy status={response.status_code} in {elapsed:.2f}s")
-                        if response.status_code in (200, 301, 302, 307, 308):
-                            test_success = True
-                            logger.info(f"[{dns_ip}] SOCKS5 proxy test PASSED (status {response.status_code}, {elapsed:.2f}s)")
-                            self._log(f"[green]{dns_ip}: SOCKS5 proxy test passed (status {response.status_code})[/green]")
-                        else:
-                            logger.warning(f"[{dns_ip}] SOCKS5 proxy unexpected status: {response.status_code}")
-                except Exception as socks_err:
-                    logger.error(f"[{dns_ip}] SOCKS5 proxy test failed: {type(socks_err).__name__}: {socks_err}")
-                    self._log(f"[red]{dns_ip}: Both HTTP and SOCKS5 proxy tests failed[/red]")
-
-            final_result = "Success" if test_success else "Failed"
-            logger.info(f"[{dns_ip}] Final result: {final_result}")
-            return final_result
-
-        except Exception as e:
-            logger.error(
-                f"[{dns_ip}] Slipstream error: {type(e).__name__}: {str(e)}",
-                exc_info=True,
-            )
-            self._log(f"[red]Slipstream error for {dns_ip}: {type(e).__name__}: {markup_escape(str(e))}[/red]")
-            return "Failed"
-        finally:
-            # Always kill the slipstream process
-            if process:
-                try:
-                    process.kill()
-                    await asyncio.to_thread(process.wait)
-                    # Remove from tracking list
-                    if process in self.slipstream_processes:
-                        self.slipstream_processes.remove(process)
-                except (ProcessLookupError, OSError) as e:
-                    logger.debug(f"Process cleanup for {dns_ip}: {e}")
-
-    # ── Extra Test Methods ───────────────────────────────────────────────
-
-    def _queue_extra_tests(self, ip: str) -> None:
-        """Queue enabled extra tests for a found DNS server (rate-limited to 5 concurrent)."""
-        async def _run_extras(dns_ip: str) -> None:
-            # Use pre-initialized semaphore (set at scan start)
-            async with self.extra_test_semaphore:
-                tasks: list[asyncio.Task] = []
-                # Always test TCP/UDP support
-                tasks.append(asyncio.create_task(self._test_tcp_udp_support(dns_ip)))
-
-                if self.security_test_enabled:
-                    tasks.append(asyncio.create_task(self._test_security(dns_ip)))
-                if self.ipv6_test_enabled:
-                    tasks.append(asyncio.create_task(self._test_ipv6(dns_ip)))
-                tasks.append(asyncio.create_task(self._test_resolve(dns_ip)))
-                if self.edns0_test_enabled:
-                    tasks.append(asyncio.create_task(self._test_edns0(dns_ip)))
-                if self.isp_info_enabled:
-                    tasks.append(asyncio.create_task(self._test_isp_info(dns_ip)))
-                if tasks:
-                    await asyncio.gather(*tasks, return_exceptions=True)
-                # Update table row after all extras finish
-                self._update_table_row(dns_ip)
-
-        task = asyncio.create_task(_run_extras(ip))
-        self.extra_test_tasks.add(task)
-        task.add_done_callback(self.extra_test_tasks.discard)
-
-    def _get_extra_summary(self, ip: str) -> str:
-        """Build a compact summary string for the Extra column."""
-        parts: list[str] = []
-        sec = self.security_results.get(ip)
-        if sec:
-            flags = []
-            if sec.get("dnssec"):
-                flags.append("[green]DNSSEC[/green]")
-            if sec.get("hijacked"):
-                flags.append("[red]Hijack[/red]")
-            if sec.get("open_resolver"):
-                flags.append("[yellow]Open[/yellow]")
-            if flags:
-                parts.extend(flags)
-
-        proto = self.protocol_results.get(ip, {})
-        if proto.get("ipv6"):
-            parts.append("[cyan]v6[/cyan]")
-        if proto.get("edns0"):
-            parts.append("[cyan]EDNS0[/cyan]")
-
-        isp = self.isp_results.get(ip)
-        if isp:
-            org = isp.get("org", "")
-            if org:
-                parts.append(f"[dim]{org}[/dim]")
-
-        if not parts:
-            return "[dim]…[/dim]"
-        return " ".join(parts)
-    
-    def _get_security_column(self, ip: str) -> str:
-        """Get security test results for table column."""
-        sec = self.security_results.get(ip)
-        if not sec:
-            return "[dim]…[/dim]"
-        
-        flags = []
-        if sec.get("dnssec"):
-            flags.append("[green]DNSSEC[/green]")
-        if sec.get("open_resolver"):
-            flags.append("[yellow]Open[/yellow]")
-        if sec.get("hijacked"):
-            flags.append("[red]Hijack[/red]")
-        
-        if not flags:
-            return "[green]Secure[/green]"
-        
-        # Format: "DNSSEC  Open" with spacing between items
-        return "  ".join(flags)
-    
-    def _get_ipv6_column(self, ip: str) -> str:
-        """Get IPv6 test result for table column."""
-        proto = self.protocol_results.get(ip, {})
-        if ip not in self.protocol_results:
-            return "[dim]…[/dim]"
-        return "[green]Yes[/green]" if proto.get("ipv6") else "[red]No[/red]"
-    
-    def _get_resolve_column(self, ip: str) -> str:
-        """Get resolved IP result for table column."""
-        if ip not in self.resolve_results:
-            return "[dim]…[/dim]"
-        result = self.resolve_results[ip]
-        if result == "-":
-            return "[dim]-[/dim]"
-        return f"[cyan]{result}[/cyan]"
-
-    def _get_edns0_column(self, ip: str) -> str:
-        """Get EDNS0 test result for table column."""
-        proto = self.protocol_results.get(ip, {})
-        if ip not in self.protocol_results:
-            return "[dim]…[/dim]"
-        return "[green]Yes[/green]" if proto.get("edns0") else "[red]No[/red]"
-    
-    def _get_isp_column(self, ip: str) -> str:
-        """Get ISP info for table column."""
-        if ip not in self.isp_results:
-            return "[dim]…[/dim]"  # Not yet tested
-        isp = self.isp_results[ip]
-        org = isp.get("org", "-") or "-"
-        if org == "-":
-            return "[dim]-[/dim]"
-        return f"[cyan]{org}[/cyan]"
-    
-    def _get_tcp_udp_column(self, ip: str) -> str:
-        """Get TCP/UDP support for table column."""
-        result = self.tcp_udp_results.get(ip)
-        if not result:
-            return "[dim]Testing…[/dim]"
-        if result == "TCP/UDP":
-            return "[green]TCP/UDP[/green]"
-        elif result == "TCP only":
-            return "[yellow]TCP only[/yellow]"
-        elif result == "UDP only":
-            return "[cyan]UDP only[/cyan]"
-        return "[dim]Unknown[/dim]"
-
-    async def _test_security(self, ip: str, resolver: "aiodns.DNSResolver | None" = None) -> None:
-        """Test DNS security: DNSSEC validation, hijacking, open resolver."""
-        result: dict = {"dnssec": False, "hijacked": False, "open_resolver": False}
-        try:
-            resolver = resolver or aiodns.DNSResolver(nameservers=[ip], timeout=3.0, tries=1)
-            nxdomain_test = f"nxdomain-{random.randbytes(6).hex()}.example.invalid"
-
-            # Run DNSSEC and hijack checks in parallel to reduce total wait time
-            async def _check_dnssec() -> bool:
-                try:
-                    return await asyncio.wait_for(self._check_dnssec_raw(ip), timeout=4.0)
-                except Exception:
-                    return False
-
-            async def _check_hijack() -> bool:
-                try:
-                    answer = await resolver.query(nxdomain_test, "A")
-                    return bool(answer)
-                except aiodns.error.DNSError:
-                    return False
-                except Exception:
-                    return False
-
-            dnssec_ok, hijacked = await asyncio.gather(
-                _check_dnssec(),
-                _check_hijack(),
-            )
-            result["dnssec"] = dnssec_ok
-            result["hijacked"] = hijacked
-            # Open resolver: it answered our queries = it's open to us
-            result["open_resolver"] = True
-
-        except Exception as e:
-            logger.debug(f"Security test error for {ip}: {e}")
-
-        self.security_results[ip] = result
-        if result["dnssec"]:
-            self._log(f"[cyan]🔒 {ip}: DNSSEC supported[/cyan]")
-        if result["hijacked"]:
-            self._log(f"[red]⚠ {ip}: DNS hijacking detected[/red]")
-
-    async def _check_dnssec_raw(self, ip: str) -> bool:
-        """Send a raw DNS query with DO (DNSSEC OK) flag to check DNSSEC support."""
-        # Build a minimal DNS query for example.com A record with EDNS0 DO flag
-        txn_id = secrets.token_bytes(2)
-        # Flags: RD=1 (recursion desired)
-        flags = b"\x01\x00"
-        # QDCOUNT=1, ANCOUNT=0, NSCOUNT=0, ARCOUNT=1 (for OPT)
-        counts = b"\x00\x01\x00\x00\x00\x00\x00\x01"
-        # Question: example.com A IN
-        qname = b"\x07example\x03com\x00"
-        qtype = b"\x00\x01"  # A
-        qclass = b"\x00\x01"  # IN
-        # OPT RR (EDNS0) with DO flag
-        # NAME=0x00 (root), TYPE=OPT(41), UDP_SIZE=4096, RCODE=0, VERSION=0, FLAGS=DO(0x8000), RDLEN=0
-        opt_rr = b"\x00\x00\x29\x10\x00\x00\x00\x80\x00\x00\x00"
-
-        query = txn_id + flags + counts + qname + qtype + qclass + opt_rr
-
-        loop = asyncio.get_event_loop()
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.setblocking(False)
-        sock.settimeout(0)
-
-        try:
-            await loop.sock_sendto(sock, query, (ip, 53))
-            data = await asyncio.wait_for(loop.sock_recv(sock, 4096), timeout=3.0)
-
-            if len(data) < 12:
-                return False
-
-            # Check AD (Authenticated Data) flag in response – bit 5 of byte 3
-            resp_flags = data[2:4]
-            ad_flag = (resp_flags[1] >> 5) & 1
-            # Also check if response contains OPT record with DO flag
-            # Simple heuristic: if AD flag is set, DNSSEC is validated
-            if ad_flag:
-                return True
-
-            # Also look for OPT record in additional section with DO flag
-            # Check ARCOUNT > 0 and scan for TYPE=41
-            arcount = struct.unpack("!H", data[10:12])[0]
-            if arcount > 0:
-                # Simplified: search for OPT type (0x0029) in response
-                if b"\x00\x29" in data[12:]:
-                    return True
-
-            return False
+            if hasattr(self, "found_servers") and self.found_servers:
+                self.table_needs_rebuild = True
+                self._rebuild_table()
         except Exception:
-            return False
-        finally:
-            sock.close()
-
-    async def _test_ipv6(self, ip: str, resolver: "aiodns.DNSResolver | None" = None) -> None:
-        """Test if the DNS server handles AAAA (IPv6) queries."""
-        result = False
-        try:
-            resolver = resolver or aiodns.DNSResolver(nameservers=[ip], timeout=3.0, tries=1)
-            try:
-                answer = await resolver.query("google.com", "AAAA")
-                if answer:
-                    result = True
-            except aiodns.error.DNSError as e:
-                # NXDOMAIN / NODATA still means the server handles AAAA queries
-                code = e.args[0] if e.args else 0
-                if code in (1, 3, 4):
-                    result = True
-        except Exception as e:
-            logger.debug(f"IPv6 test error for {ip}: {e}")
-
-        self.protocol_results.setdefault(ip, {})["ipv6"] = result
-        if result:
-            self._log(f"[cyan]{ip}: IPv6 (AAAA) supported[/cyan]")
-
-    async def _test_resolve(self, ip: str, resolver: "aiodns.DNSResolver | None" = None) -> None:
-        """Resolve the scan domain via this DNS server and record the resulting IP."""
-        # For non-A record scans (NS, AAAA, etc.) the user's domain may not have
-        # accessible A records on the servers being tested, so fall back to a
-        # universally-resolvable domain.  For A-record scans we use the user's own
-        # domain so the column reflects that specific lookup.
-        if self.dns_type == "A":
-            resolve_domain = self.domain.strip() or "google.com"
-        else:
-            resolve_domain = "google.com"
-        try:
-            resolver = resolver or aiodns.DNSResolver(nameservers=[ip], timeout=3.0, tries=1)
-            answer = await resolver.query(resolve_domain, "A")
-            if answer:
-                ips = [r.host for r in answer]
-                resolved = ips[0] if len(ips) == 1 else ", ".join(ips[:2])
-                self.resolve_results[ip] = resolved
-                self._log(f"[cyan]{ip}: {resolve_domain} → {resolved}[/cyan]")
-            else:
-                self.resolve_results[ip] = "-"
-        except Exception as e:
-            logger.debug(f"Resolve test error for {ip}: {e}")
-            self.resolve_results[ip] = "-"
-
-    async def _test_edns0(self, ip: str) -> None:
-        """Test EDNS0 support by sending OPT record and checking response."""
-        result = False
-        try:
-            # Build DNS query with EDNS0 OPT record
-            txn_id = secrets.token_bytes(2)
-            flags = b"\x01\x00"  # RD=1
-            # QDCOUNT=1, ANCOUNT=0, NSCOUNT=0, ARCOUNT=1 (OPT)
-            counts = b"\x00\x01\x00\x00\x00\x00\x00\x01"
-            qname = b"\x07example\x03com\x00"
-            qtype = b"\x00\x01"  # A
-            qclass = b"\x00\x01"  # IN
-            # OPT RR: NAME=root, TYPE=OPT(41), UDP=4096, RCODE_EXT=0, VERSION=0, FLAGS=0, RDLEN=0
-            opt_rr = b"\x00\x00\x29\x10\x00\x00\x00\x00\x00\x00\x00"
-
-            query = txn_id + flags + counts + qname + qtype + qclass + opt_rr
-
-            loop = asyncio.get_event_loop()
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.setblocking(False)
-
-            try:
-                await loop.sock_sendto(sock, query, (ip, 53))
-                data = await asyncio.wait_for(
-                    loop.sock_recv(sock, 4096), timeout=3.0
-                )
-
-                if len(data) >= 12:
-                    # Check ARCOUNT in response
-                    arcount = struct.unpack("!H", data[10:12])[0]
-                    if arcount > 0:
-                        # Look for OPT record type (41 = 0x0029) in response
-                        if b"\x00\x29" in data[12:]:
-                            result = True
-            finally:
-                sock.close()
-
-        except Exception as e:
-            logger.debug(f"EDNS0 test error for {ip}: {e}")
-
-        self.protocol_results.setdefault(ip, {})["edns0"] = result
-        if result:
-            self._log(f"[cyan]{ip}: EDNS0 supported[/cyan]")
-
-    async def _test_isp_info(self, ip: str) -> None:
-        """Look up ISP/ASN/org information for the DNS server IP."""
-        info: dict = {"org": "-", "isp": "-", "asn": "", "country": ""}
-        try:
-            # Rate-limit ip-api.com: serialize access but release lock before sleeping
-            async with self._isp_rate_lock:
-                now = time.monotonic()
-                wait = 1.4 - (now - self._isp_last_request)  # ~43 req/min
-                self._isp_last_request = time.monotonic() + max(wait, 0)
-            # Sleep OUTSIDE the lock so other coroutines aren't blocked waiting
-            if wait > 0:
-                await asyncio.sleep(wait)
-
-            # Use ip-api.com (free, no key required, 45 req/min)
-            url = f"http://ip-api.com/json/{ip}?fields=as,org,isp,country,countryCode"
-            client = getattr(self, "_http_client", None)
-            owned = client is None
-            if owned:
-                client = httpx.AsyncClient(timeout=5.0)
-            try:
-                for attempt in range(2):
-                    resp = await client.get(url)
-                    if resp.status_code == 429:
-                        # Back off and retry once
-                        logger.warning(f"ip-api.com rate-limited for {ip}, retrying after 60s")
-                        await asyncio.sleep(60.0)
-                        continue
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        info = {
-                            "org": data.get("org", "") or "-",
-                            "isp": data.get("isp", "") or "-",
-                            "asn": data.get("as", ""),
-                            "country": data.get("countryCode", ""),
-                        }
-                    break
-            finally:
-                if owned:
-                    await client.aclose()
-        except Exception as e:
-            logger.debug(f"ISP info error for {ip}: {e}")
-
-        self.isp_results[ip] = info
-        if info.get("org"):
-            self._log(
-                f"[dim]{ip}: {info.get('org', '')} ({info.get('country', '')})[/dim]"
-            )
-
-    async def _test_tcp_udp_support(self, ip: str) -> None:
-        """Test if DNS server supports TCP, UDP, or both protocols."""
-        tcp_works = False
-        udp_works = False
-        
-        # UDP was already confirmed during main scan
-        udp_works = True
-        
-        # Test TCP (port 53)
-        try:
-            # Build DNS query
-            txn_id = secrets.token_bytes(2)
-            flags = b"\x01\x00"  # RD=1
-            counts = b"\x00\x01\x00\x00\x00\x00\x00\x00"  # QDCOUNT=1
-            qname = b"\x06google\x03com\x00"
-            qtype = b"\x00\x01"  # A
-            qclass = b"\x00\x01"  # IN
-            dns_msg = txn_id + flags + counts + qname + qtype + qclass
-            
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(ip, 53), timeout=2.0
-            )
-            try:
-                # Send length-prefixed DNS query
-                length_prefix = struct.pack("!H", len(dns_msg))
-                writer.write(length_prefix + dns_msg)
-                await writer.drain()
-                
-                # Read response
-                resp_len_bytes = await asyncio.wait_for(
-                    reader.readexactly(2), timeout=2.0
-                )
-                resp_len = struct.unpack("!H", resp_len_bytes)[0]
-                
-                if resp_len > 0:
-                    resp_data = await asyncio.wait_for(
-                        reader.readexactly(resp_len), timeout=2.0
-                    )
-                    # Valid DNS response
-                    if len(resp_data) >= 12 and resp_data[:2] == txn_id:
-                        tcp_works = True
-            finally:
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.debug(f"TCP test error for {ip}: {e}")
-        
-        # Determine result
-        if tcp_works and udp_works:
-            result = "TCP/UDP"
-        elif tcp_works:
-            result = "TCP only"
-        elif udp_works:
-            result = "UDP only"
-        else:
-            result = "None"
-        
-        self.tcp_udp_results[ip] = result
-        logger.debug(f"{ip}: Protocol support = {result}")
-
-    def _shuffle_remaining_ips(self) -> None:
-        """Legacy shuffle method - now signals instant reshuffle."""
-        if self.shuffle_signal:
-            self.shuffle_signal.set()
-            self._log("[cyan]Shuffle signal sent - reshuffling stream...[/cyan]")
-
-    async def _shuffle_remaining_ips_async(self) -> None:
-        """Async shuffle - signals instant reshuffle via shuffle_signal."""
-        if self.shuffle_signal:
-            self.shuffle_signal.set()
-            self._log("[cyan]Shuffle signal sent - reshuffling stream...[/cyan]")
-
-    def _play_bell_sound(self) -> None:
-        """Play a single coin/sparkle sound with error handling for systems without sound support."""
-        try:
-            if platform.system() == "Windows":
-                # Windows - single high-pitched coin sparkle sound
-                import winsound
-
-                winsound.Beep(1400, 60)  # Single bright coin-like tone
-            elif platform.system() == "Darwin":
-                # macOS - try system coin sound
-                try:
-                    import subprocess
-
-                    subprocess.run(
-                        ["afplay", "/System/Library/Sounds/Tink.aiff"],
-                        check=False,
-                        timeout=1,
-                    )
-                except (
-                    FileNotFoundError,
-                    subprocess.SubprocessError,
-                    subprocess.TimeoutExpired,
-                ):
-                    print("\a", end="", flush=True)
-            else:
-                # Linux/Unix - single terminal bell
-                print("\a", end="", flush=True)
-        except ImportError:
-            # winsound not available on non-Windows
-            try:
-                print("\a", end="", flush=True)
-            except OSError:
-                pass  # Terminal doesn't support bell
-        except (OSError, AttributeError) as e:
-            logger.debug(f"Bell sound failed: {e}")
+            pass
 
     def _log(self, message: str) -> None:
         """Add message to log display."""
@@ -3867,6 +2872,31 @@ class DNSScannerTUI(App):
         except Exception as e:
             # Widget might not be ready or mounted yet - this is expected during startup
             logger.debug(f"Log widget not available: {e}")
+
+    def _debug_log(self, message: str) -> None:
+        """Write a timestamped line to the debug log file when debug_mode is on."""
+        if not self.debug_mode:
+            return
+        f = self._debug_log_file
+        if f is None:
+            return
+        ts = time.strftime("%H:%M:%S") + f".{int(time.time() * 1000) % 1000:03d}"
+        try:
+            f.write(f"[{ts}] {message}\n")
+            f.flush()
+        except Exception:
+            pass
+
+    def _close_debug_log(self) -> None:
+        """Close the debug log file if it is open."""
+        f = self._debug_log_file
+        if f is not None:
+            try:
+                f.write("# --- session ended ---\n")
+                f.close()
+            except Exception:
+                pass
+            self._debug_log_file = None
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle double-click on DNS row to copy IP and show extra details."""
@@ -3917,185 +2947,6 @@ class DNSScannerTUI(App):
                             self._log(f"[dim]{line}[/dim]")
         except Exception as e:
             logger.debug(f"Row selection error: {e}")
-
-    def _build_csv_headers_and_rows(self, servers_to_save: dict) -> tuple[list[str], list[list[str]]]:
-        """Build CSV headers and row data based on enabled tests."""
-        headers = ["DNS", "Ping (ms)"]
-        if self.test_slipstream:
-            headers.append("Proxy Test")
-        headers.append("IPv4/IPv6")
-        # TCP/UDP is always tested
-        headers.append("TCP/UDP")
-        if self.security_test_enabled:
-            headers.append("Security")
-        if self.edns0_test_enabled:
-            headers.append("EDNS0")
-        headers.append("Resolved IP")
-        headers.append("ISP")
-
-        # Sort: 1) proxy Success first (if enabled), 2) DNSSEC, 3) ping ascending
-        def _csv_sort_key(item):
-            ip, t = item
-            proxy_rank = 0 if (self.test_slipstream and self.proxy_results.get(ip) == "Success") else (1 if self.test_slipstream else 0)
-            dnssec_rank = 0 if self.security_results.get(ip, {}).get("dnssec") else 1
-            return (proxy_rank, dnssec_rank, t)
-        sorted_servers = sorted(servers_to_save.items(), key=_csv_sort_key)
-
-        rows: list[list[str]] = []
-        for ip, resp_time in sorted_servers:
-            row = [ip, f"{resp_time * 1000:.0f}"]
-            if self.test_slipstream:
-                row.append(self.proxy_results.get(ip, "N/A"))
-            # IPv4/IPv6
-            proto = self.protocol_results.get(ip, {})
-            if proto.get("ipv6"):
-                row.append("IPv4/IPv6")
-            elif ip in self.protocol_results:
-                row.append("IPv4")
-            else:
-                row.append("")
-            # TCP/UDP
-            row.append(self.tcp_udp_results.get(ip, ""))
-            # Security
-            if self.security_test_enabled:
-                sec = self.security_results.get(ip, {})
-                if ip in self.security_results:
-                    flags = []
-                    if sec.get("dnssec"):
-                        flags.append("DNSSEC")
-                    if sec.get("open_resolver"):
-                        flags.append("Open Resolver")
-                    if sec.get("hijacked"):
-                        flags.append("Hijacked")
-                    row.append(", ".join(flags) if flags else "Secure")
-                else:
-                    row.append("")
-            # EDNS0
-            if self.edns0_test_enabled:
-                if ip in self.protocol_results and "edns0" in self.protocol_results[ip]:
-                    row.append("Yes" if proto.get("edns0") else "No")
-                else:
-                    row.append("")
-            # Resolved IP
-            row.append(self.resolve_results.get(ip, ""))
-            # ISP (rightmost column)
-            isp = self.isp_results.get(ip, {})
-            org = isp.get("org", "") or ""
-            row.append(org if org != "-" else "")
-            rows.append(row)
-        return headers, rows
-
-    def _auto_save_results(self) -> None:
-        """Auto-save results as CSV at end of scan.
-
-        When slipstream testing is enabled, only save DNS servers that passed the proxy test.
-        """
-        # Filter servers based on test mode
-        if self.test_slipstream:
-            # Only save servers that passed proxy test
-            passed_servers = {
-                ip: time
-                for ip, time in self.server_times.items()
-                if self.proxy_results.get(ip) == "Success"
-            }
-            if not passed_servers:
-                self._log(
-                    "[yellow]No DNS servers passed proxy test - nothing to save.[/yellow]"
-                )
-                self._log(
-                    f"[yellow]Total DNS found: {len(self.found_servers)}, Passed proxy: 0[/yellow]"
-                )
-                logger.warning(
-                    f"No servers passed proxy test. Total found: {len(self.found_servers)}"
-                )
-                return
-            servers_to_save = passed_servers
-            self._log(
-                f"[cyan]Saving {len(passed_servers)}/{len(self.found_servers)} DNS servers that passed proxy test...[/cyan]"
-            )
-            logger.info(f"Saving {len(passed_servers)} servers that passed proxy test")
-        else:
-            # Save all found servers
-            if not self.found_servers:
-                self._log("[yellow]No DNS servers found to save.[/yellow]")
-                return
-            servers_to_save = self.server_times
-
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_dir = Path("results")
-
-        try:
-            output_dir.mkdir(exist_ok=True)
-        except (OSError, PermissionError) as e:
-            self._log(f"[red]Failed to create results directory: {e}[/red]")
-            logger.error(f"Failed to create results directory: {e}")
-            return
-
-        csv_file = output_dir / f"{timestamp}.csv"
-        headers, rows = self._build_csv_headers_and_rows(servers_to_save)
-
-        try:
-            with open(csv_file, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(headers)
-                writer.writerows(rows)
-
-            self._log(f"[green]✓ Results auto-saved to: {csv_file}[/green]")
-            logger.info(f"Results auto-saved to {csv_file}")
-        except (OSError, IOError, PermissionError) as e:
-            self._log(f"[red]Failed to save results: {e}[/red]")
-            logger.error(f"Failed to auto-save results to {csv_file}: {e}")
-
-    def action_save_results(self) -> None:
-        """Save results as CSV.
-
-        When slipstream testing is enabled, only save DNS servers that passed the proxy test.
-        """
-        # Filter servers based on test mode
-        if self.test_slipstream:
-            passed_servers = {
-                ip: time
-                for ip, time in self.server_times.items()
-                if self.proxy_results.get(ip) == "Success"
-            }
-            if not passed_servers:
-                self.notify("No servers passed proxy test!", severity="warning")
-                return
-            servers_to_save = passed_servers
-        else:
-            if not self.found_servers:
-                self.notify("No results to save!", severity="warning")
-                return
-            servers_to_save = self.server_times
-
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_dir = Path("results")
-
-        try:
-            output_dir.mkdir(exist_ok=True)
-        except (OSError, PermissionError) as e:
-            self.notify(f"Failed to create results directory: {e}", severity="error")
-            logger.error(f"Failed to create results directory: {e}")
-            return
-
-        csv_file = output_dir / f"scan_{timestamp}.csv"
-        headers, rows = self._build_csv_headers_and_rows(servers_to_save)
-
-        try:
-            with open(csv_file, "w", newline="", encoding="utf-8") as f:
-                writer = csv.writer(f)
-                writer.writerow(headers)
-                writer.writerows(rows)
-
-            self.notify(
-                f"Saved {len(rows)} servers: {csv_file.name}",
-                severity="information",
-            )
-            logger.info(f"Results saved to {csv_file}")
-        except (OSError, IOError, PermissionError) as e:
-            self.notify(f"Failed to save results: {e}", severity="error")
-            logger.error(f"Failed to save results to {csv_file}: {e}")
-
 
 def main():
     """Main entry point."""

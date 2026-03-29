@@ -1,4 +1,4 @@
-﻿## 🎉 What's New / چه چیزی جدید شده / 更新内容
+## 🎉 What's New / چه چیزی جدید شده / 更新内容
 
 **Jump to:** [🇬🇧 English](#-english) · [🇮🇷 فارسی](#-فارسی) · [🇨🇳 中文](#-中文)
 
@@ -6,253 +6,145 @@
 
 ### 🇬🇧 English
 
-#### 🚀 v1.4.3
+#### 🚀 v2.0.0
 
-**🐛 Bug Fix — NS Record Scanning**
-- 🔎 **NS / non-A record scans now return correct "Resolved IP" values** — Previously, when scanning with type `NS` (or any non-A type), the "Resolved IP" column queried the user's own domain for an A record through each candidate server. Many servers that correctly respond to NS or AAAA queries have no cached A record for that domain, so the column showed `-` for all results. Now, the "Resolved IP" column always performs an A-record lookup for `google.com` when the selected DNS type is not `A`, guaranteeing a meaningful result regardless of query type.
+**🌐 Three Scan Modes: Slipstream · SlipNet · DNS Scan**
+- ✅ **Slipstream** — Classic proxy testing with SOCKS5 support
+- ✅ **SlipNet** — Full SlipNet configs support for DNSTT and NoiseDNS tunnels with SOCKS5 / SSH authentication and auto-detected auth method
+- ✅ **DNS Scan** — New lightweight scan mode: insert a domain, set concurrency, and scan — no proxy testing, no authentication. Tests security, DNS types, ping, resolved IP, EDNS0, and more
 
----
+**🔀 New Scan Strategy — Bidirectional Multi-Range**
+- ✅ Scanner now scans from the **start and end** of each IP range simultaneously across multiple ranges, combined with random shuffle — faster performance and higher chance of finding working DNS servers compared to linear scanning
 
-#### 🚀 v1.4.2
+**🧪 Auto DNS Type Check + Scoring**
+- ✅ All DNS types (A, AAAA, MX, TXT, NS) are automatically tested and scored per server — same scoring system as the SlipNet scanner
 
-**📦 Android / ARM Release Binaries**
-- ✅ **`pydns-scanner-linux-aarch64`** — Pre-built ARM64 binary for Linux ARM64 servers, Raspberry Pi, and Android via proot-distro
-- ✅ **`pydns-scanner-linux-arm`** — Pre-built ARMv7 binary for 32-bit ARM devices
-- ✅ GitHub Actions now builds ARM executables via QEMU emulation alongside Windows, Linux x86_64, and macOS
+**⚙️ New Advanced Section**
+Fully customizable scanning parameters:
+- 🔧 Minimum proxy ping threshold for proxy test
+- 🔧 DNS connection timeout
+- 🔧 Proxy end-to-end test timeout
+- 🔧 Parallel proxy test count
+- 🔧 Custom shuffle steps
+- 🔧 Proxy test URL + expected response status code
+- 🔧 Set MTU (experimental OS-level MTU override)
+- 🔧 Query size for SlipNet (DNSTT / NoiseDNS)
 
-**📦 PyPI: Seamless Install on Android / Termux**
-- ✅ **Optional C-extension deps** — `google-re2`, `orjson`, and `pyperclip` moved from hard requirements to optional extras (`pip install pydns-scanner[full]`); core `pip install pydns-scanner` now installs cleanly on Termux without build failures
-- ✅ Code already falls back to stdlib equivalents (`re`, `json`, no-op clipboard) when these packages are absent
+**🎨 UX Improvements**
+- ✅ Enhanced scan statistics display
+- ✅ Improved result table writing and formatting
+- ✅ New proxy test status UI with real-time feedback
+- ✅ Better Filtered IP detection
+- ✅ Log section is always visible (no longer toggleable)
 
----
+**🔧 Experimental: Set OS MTU**
+- ✅ Scan with a specified MTU value — experimental feature for advanced network tuning
 
-#### 🚀 v1.4.1
+**⚡ Performance**
+- ✅ Significantly higher scan performance
+- ✅ Auto detect auth method for SlipNet (DNSTT / NoiseDNS)
 
-**🤖 Android / Termux Compatibility**
-- ✅ **Platform-aware imports** — `google-re2` and `pyperclip` are automatically skipped on Android/Termux; falls back to stdlib `re` and a no-op clipboard wrapper respectively
-- ✅ **Zero crash on Termux** — App now launches cleanly on Termux without any manual package removal
-
-**🐛 Bug Fix**
-- 🔎 **Resolved IP column** — Previously always resolved `google.com` regardless of the configured scan domain; now correctly resolves the domain entered in the scan configuration
-
----
-
-#### 🚀 v1.4.0
-
-**🎨 Redesigned Start Menu**
-- ✅ Completely redesigned configuration screen with cleaner layout and improved visual hierarchy
-- ✅ Optional log panel — hidden by default; press `L` during scan to toggle on/off
-
-**🗂️ Three Scan Modes**
-All three modes use the same scanning logic. The differences are the maximum number of IPs read from the CIDR file and the **shuffle step**: if no working DNS is found within that many consecutive IPs, the remaining range reshuffles automatically so servers spread across a large subnet are not missed.
-- 🚀 **Quick Scan** — up to **25,000 IPs**, shuffle step every **500** IPs
-- 🔍 **Deep Scan** — up to **50,000 IPs**, shuffle step every **1,000** IPs
-- 🔬 **Full Scan** — **unlimited IPs** (entire file), shuffle step every **3,000** IPs
-
-**🔐 Security Testing**
-- 🚨 **Hijack detection** — Detects if the server intercepts or redirects queries
-- 🚫 **Filtered detection** — Identifies servers that silently block certain domains
-- 🌍 **Open resolver check** — Flags servers that resolve arbitrary external queries
-- 🔒 **DNSSEC validation** — Reports whether the server returns signed (DNSSEC) responses
-
-**🌐 Network Analysis Columns**
-- 🔎 **Resolved IP** — Each candidate DNS server resolves `google.com`; the resulting IP is shown in the results table
-- 📡 **ISP detection** — AS number and organisation name per server via ip-api.com (rate-limited, async)
-- 🌍 **IPv4 / IPv6 detection** — Shows which IP versions each server supports
-- 📶 **EDNS0 detection** — Tests and displays EDNS0 extension support
-- 🔀 **TCP / UDP column** — Tests and shows supported transports
-
-**🔌 Slipstream Rust Plus — Improved Proxy Testing**
-- ⬆️ **Upgraded to Slipstream Rust Plus client** — significantly faster binaries across all platforms
-- ✅ **HTTPS CONNECT tunnel** — Proxy test now targets `https://www.google.com` via HTTP CONNECT; previous plain-HTTP probe always returned "Failed"
-- ✅ **Independent SOCKS5 test** — SOCKS5 tested on its own, not just as a fallback
-- ✅ **False-positive elimination** — Improved result validation removes incorrect pass/fail results
-- 🧮 **Smart multi-key sort** — Results sorted: Proxy pass → DNSSEC → fastest ping
-
-**🗃️ Results Table Overhaul**
-- 📐 **New column layout** — Port column removed; order: Ping → [Proxy] → IPv4/IPv6 → Security → TCP/UDP → EDNS0 → Resolved IP → ISP
-- 📊 **Live pass/fail counters** — Statistics bar updates correctly throughout the scan
-- 💾 **CSV output** — Results saved as `TIMESTAMP.csv`; columns adapt to enabled tests (Proxy Test, Security, EDNS0 columns included only when enabled)
-
-**🐛 Bug Fixes**
-- 📁 **Custom CIDR selection** — Fixed bug where selecting a custom IP range file was not applied correctly in the scan menu
-- 🔢 **/31 and /32 subnet fix** — IPs from these subnets were previously silently skipped
-- 🔓 **ISP lock hang** — Rate-limit lock released before sleeping, eliminating pipeline stalls
-
-**⚡ Performance & Module Improvements**
-- 🚄 **`google-re2`** — Replaced Python stdlib `re` with Google's RE2 engine for faster, safer regex
-- 🔁 **Per-test aiodns resolver** — Each DNS test creates its own resolver, preventing C-ares concurrency hangs
-- 📐 **Range-based IP shuffle** — Integer arithmetic replaces `list(subnet.hosts())` for large CIDR ranges
-- 🚦 **ISP rate limiter** — ip-api.com capped with async lock + automatic 429 retry with 60 s backoff
-- ⚠️ **Windows socket advisory** — Warning logged when concurrency exceeds 64 (Windows selector event-loop cap)
+**⚙️ Bug Fixes**
+- 🔧 Fixed UI freeze after scanning large DNS ranges
+- 🔧 Fixed speed drop after 500K+ scanned IPs
+- 🔧 Fixed memory leak during long-running scans
+- 🔧 Updated dependencies to resolve Dependabot low-severity vulnerability alerts
 
 ---
 
 ### 🇮🇷 فارسی
 
-#### 🚀 نسخه ۱.۴.۳
+#### 🚀 نسخه ۲.۰.۰
 
-**🐛 رفع باگ — اسکن رکورد NS**
-- 🔎 **اسکن‌های NS و انواع غیر-A اکنون مقادیر صحیح در ستون «Resolved IP» نمایش می‌دهند** — پیش از این، هنگام اسکن با نوع `NS` (یا هر نوع غیر-A)، ستون «Resolved IP» دامنه کاربر را از طریق هر سرور کاندیدا برای رکورد A جستجو می‌کرد. بسیاری از سرورهایی که به درستی به پرس‌وجوهای NS یا AAAA پاسخ می‌دهند، رکورد A آن دامنه را در کش ندارند و ستون برای همه نتایج `-` نشان می‌داد. اکنون، ستون «Resolved IP» همیشه هنگامی که نوع DNS انتخابی `A` نیست، یک جستجوی A-record برای `google.com` انجام می‌دهد و نتیجه‌ای معنادار را صرف‌نظر از نوع پرس‌وجو تضمین می‌کند.
+**🌐 سه حالت اسکن: Slipstream · SlipNet · DNS Scan**
+- ✅ **Slipstream** — تست پروکسی کلاسیک با پشتیبانی SOCKS5
+- ✅ **SlipNet** — پشتیبانی کامل از تنظیمات SlipNet برای تونل‌های DNSTT و NoiseDNS با احراز هویت SOCKS5 / SSH و تشخیص خودکار روش احراز هویت
+- ✅ **DNS Scan** — حالت اسکن سبک جدید: فقط دامنه را وارد کنید، همزمانی را تنظیم کنید و اسکن کنید — بدون تست پروکسی، بدون احراز هویت. امنیت، انواع DNS، پینگ، IP حل‌شده، EDNS0 و موارد بیشتر را تست می‌کند
 
----
+**🔀 استراتژی اسکن جدید — دوطرفه چند محدوده‌ای**
+- ✅ اسکنر اکنون همزمان از **ابتدا و انتهای** هر محدوده IP در چندین محدوده اسکن می‌کند، همراه با shuffle تصادفی — عملکرد سریع‌تر و شانس بیشتر برای یافتن سرورهای DNS فعال در مقایسه با اسکن خطی
 
-#### 🚀 نسخه ۱.۴.۲
+**🧪 بررسی خودکار انواع DNS + امتیازدهی**
+- ✅ تمام انواع DNS (A، AAAA، MX، TXT، NS) به صورت خودکار برای هر سرور تست و امتیازدهی می‌شوند — همان سیستم امتیازدهی اسکنر SlipNet
 
-**📦 باینری‌های انتشار Android / ARM**
-- ✅ **`pydns-scanner-linux-aarch64`** — باینری آماده ARM64 برای سرورهای لینوکس ARM64، رزبری پای و اندروید از طریق proot-distro
-- ✅ **`pydns-scanner-linux-arm`** — باینری آماده ARMv7 برای دستگاه‌های ARM 32-بیتی
-- ✅ GitHub Actions اکنون فایل‌های اجرایی ARM را از طریق شبیه‌سازی QEMU در کنار Windows، Linux x86_64 و macOS می‌سازد
+**⚙️ بخش پیشرفته جدید**
+پارامترهای اسکن کاملاً قابل تنظیم:
+- 🔧 حداقل آستانه پینگ پروکسی برای تست پروکسی
+- 🔧 زمان انتظار اتصال DNS
+- 🔧 زمان انتظار تست سرتاسری پروکسی
+- 🔧 تعداد تست‌های پروکسی موازی
+- 🔧 مراحل shuffle سفارشی
+- 🔧 آدرس تست پروکسی + کد وضعیت پاسخ مورد انتظار
+- 🔧 تنظیم MTU (تغییر آزمایشی MTU در سطح سیستم‌عامل)
+- 🔧 اندازه پرس‌وجو برای SlipNet (DNSTT / NoiseDNS)
 
-**📦 PyPI: نصب بی‌دردسر روی Android / Termux**
-- ✅ **وابستگی‌های C-extension اختیاری** — `google-re2`، `orjson` و `pyperclip` از وابستگی اجباری به اکسترای اختیاری (`pip install pydns-scanner[full]`) منتقل شدند؛ `pip install pydns-scanner` پایه اکنون بدون خطای ساخت روی Termux نصب می‌شود
-- ✅ کد به‌طور خودکار به معادل‌های استاندارد (`re`، `json`، کلیپ‌بورد بی‌عمل) جایگزین می‌شود
+**🎨 بهبودهای UX**
+- ✅ نمایش بهبودیافته آمار اسکن
+- ✅ نوشتن و قالب‌بندی بهتر جدول نتایج
+- ✅ رابط کاربری جدید وضعیت تست پروکسی با بازخورد زنده
+- ✅ تشخیص بهتر IP فیلترشده
+- ✅ بخش لاگ همیشه نمایان (دیگر قابل تغییر نیست)
 
----
+**🔧 آزمایشی: تنظیم MTU سیستم‌عامل**
+- ✅ اسکن با مقدار MTU مشخص — ویژگی آزمایشی برای تنظیم پیشرفته شبکه
 
-#### 🚀 نسخه ۱.۴.۱
+**⚡ عملکرد**
+- ✅ عملکرد اسکن به‌طور قابل توجهی بالاتر
+- ✅ تشخیص خودکار روش احراز هویت برای SlipNet (DNSTT / NoiseDNS)
 
-**🤖 سازگاری با Android / Termux**
-- ✅ **وارد کردن وابسته به پلتفرم** — `google-re2` و `pyperclip` روی Android/Termux به‌طور خودکار رد می‌شوند؛ به ترتیب به `re` استاندارد و یک wrapper بی‌عمل جایگزین می‌شوند
-- ✅ **بدون crash در Termux** — اپلیکیشن اکنون بدون نیاز به حذف دستی هیچ بسته‌ای در Termux اجرا می‌شود
-
-**🐛 رفع باگ**
-- 🔎 **ستون Resolved IP** — قبلاً بدون توجه به دامنه پیکربندی‌شده همیشه `google.com` را resolve می‌کرد؛ اکنون دامنه وارد‌شده در تنظیمات اسکن به‌درستی resolve می‌شود
-
----
-
-#### 🚀 نسخه ۱.۴.۰
-
-**🎨 منوی شروع طراحی‌شده از نو**
-- ✅ صفحه پیکربندی کاملاً بازطراحی شده با چیدمان تمیزتر و سلسله‌مراتب بصری بهبودیافته
-- ✅ پنل لاگ اختیاری — پیش‌فرض پنهان است؛ کلید `L` را حین اسکن بزنید تا آن را روشن یا خاموش کنید
-
-**🗂️ سه حالت اسکن**
-هر سه حالت از منطق اسکن یکسانی استفاده می‌کنند. تفاوت تنها در تعداد IP خوانده‌شده از فایل CIDR و **آستانه shuffle** است: اگر در این تعداد IP متوالی هیچ DNS فعالی یافت نشود، محدوده باقی‌مانده خودکار shuffle می‌شود.
-- 🚀 **Quick Scan (اسکن سریع)** — حداکثر 25,000 IP، آستانه shuffle هر 500 IP
-- 🔍 **Deep Scan (اسکن عمیق)** — حداکثر 50,000 IP، آستانه shuffle هر 1,000 IP
-- 🔬 **Full Scan (اسکن کامل)** — تعداد IP نامحدود (کل فایل)، آستانه shuffle هر 3,000 IP
-
-**🔐 تست امنیتی**
-- 🚨 **تشخیص Hijack** — آیا سرور DNS درخواست‌ها را رهگیری یا تغییر مسیر می‌دهد
-- 🚫 **تشخیص Filtered** — سرورهایی که دامنه‌های خاص را بی‌صدا بلاک می‌کنند
-- 🌍 **بررسی Open Resolver** — سرورهایی که پرس‌وجوهای خارجی دلخواه را resolve می‌کنند
-- 🔒 **اعتبارسنجی DNSSEC** — آیا سرور پاسخ‌های امضاشده برمی‌گرداند
-
-**🌐 ستون‌های تحلیل شبکه**
-- 🔎 **Resolved IP** — هر سرور DNS کاندیدا برای resolve کردن `google.com` استفاده می‌شود و IP نتیجه در جدول نمایش می‌یابد
-- 📡 **تشخیص ISP** — شماره AS و نام سازمان از طریق ip-api.com (محدودشده، ناهمزمان)
-- 🌍 **تشخیص IPv4/IPv6** — سرور روی IPv4، IPv6 یا هر دو پاسخ می‌دهد
-- 📶 **تشخیص EDNS0** — پشتیبانی از افزونه EDNS0 تست و نمایش داده می‌شود
-- 🔀 **ستون TCP/UDP** — انتقال‌های پشتیبانی‌شده تست و نمایش داده می‌شوند
-
-**🔌 Slipstream Rust Plus — تست پروکسی بهبودیافته**
-- ⬆️ **ارتقا به کلاینت Slipstream Rust Plus** — باینری‌های سریع‌تر در همه پلتفرم‌ها
-- ✅ **تونل HTTPS CONNECT** — تست پروکسی از `https://www.google.com` با HTTP CONNECT استفاده می‌کند؛ پروب HTTP ساده قبلی همیشه «Failed» برمی‌گرداند
-- ✅ **تست SOCKS5 مستقل** — SOCKS5 جداگانه تست می‌شود
-- ✅ **حذف نتایج false-positive** — اعتبارسنجی بهبودیافته اشتباهات را برطرف می‌کند
-- 🧮 **مرتب‌سازی هوشمند چند کلیدی** — موفقیت پروکسی → DNSSEC → سریع‌ترین پینگ
-
-**🗃️ بازطراحی جدول نتایج**
-- 📐 **چیدمان ستون جدید** — ستون پورت حذف شد؛ ترتیب: Ping → [Proxy] → IPv4/IPv6 → Security → TCP/UDP → EDNS0 → Resolved IP → ISP
-- 📊 **شمارنده‌های زنده Pass/Fail** — نوار آمار در طول کل اسکن به‌درستی به‌روز می‌شود
-- 💾 **خروجی CSV** — نتایج به صورت `TIMESTAMP.csv` ذخیره می‌شوند؛ ستون‌ها با تست‌های فعال تطبیق می‌یابند
-
-**🐛 رفع باگ**
-- 📁 **انتخاب CIDR سفارشی** — باگی که هنگام انتخاب فایل محدوده IP سفارشی اعمال نمی‌شد رفع شد
-- 🔢 **رفع باگ زیرشبکه /31 و /32** — IP‌های این زیرشبکه‌ها قبلاً بی‌صدا رد می‌شدند
-- 🔓 **رفع قفل ISP** — قفل rate-limit قبل از sleep آزاد می‌شود تا از توقف pipeline جلوگیری شود
-
-**⚡ بهبودهای عملکرد و ماژول‌ها**
-- 🚄 **`google-re2`** — کتابخانه `re` با موتور RE2 گوگل جایگزین شد برای regex سریع‌تر و ایمن‌تر
-- 🔁 **Resolver اختصاصی برای هر تست** — از قفل شدن C-ares جلوگیری می‌کند
-- 📐 **Shuffle بر پایه محدوده** — حساب عددی جایگزین `list(subnet.hosts())` برای CIDR‌های بزرگ
-- 🚦 **محدودکننده نرخ ISP** — درخواست‌های ip-api.com محدود + retry خودکار برای خطای 429
-- ⚠️ **هشدار سوکت ویندوز** — هنگام تجاوز همزمانی از ۶۴ سوکت هشدار داده می‌شود
+**⚙️ رفع باگ**
+- 🔧 رفع فریز شدن رابط کاربری پس از اسکن محدوده‌های بزرگ DNS
+- 🔧 رفع افت سرعت پس از اسکن بیش از ۵۰۰ هزار IP
+- 🔧 رفع نشت حافظه در اسکن‌های طولانی
+- 🔧 به‌روزرسانی وابستگی‌ها برای رفع هشدارهای آسیب‌پذیری کم‌شدت Dependabot
 
 ---
 
 ### 🇨🇳 中文
 
-#### 🚀 v1.4.3
+#### 🚀 v2.0.0
 
-**🐛 Bug 修复 — NS 记录扫描**
-- 🔎 **NS / 非 A 类型扫描现在可正确显示"Resolved IP"列** — 此前，当使用 `NS`（或任何非 A 类型）进行扫描时，"Resolved IP"列会通过每个候选服务器查询用户域名的 A 记录。许多能够正确响应 NS 或 AAAA 查询的服务器并未缓存该域名的 A 记录，导致列对所有结果显示 `-`。现在，当所选 DNS 类型不是 `A` 时，"Resolved IP"列始终对 `google.com` 执行 A 记录查询，确保无论查询类型如何都能显示有意义的结果。
+**🌐 三种扫描模式：Slipstream · SlipNet · DNS Scan**
+- ✅ **Slipstream** — 经典代理测试，支持 SOCKS5
+- ✅ **SlipNet** — 完整 SlipNet 配置支持：DNSTT 和 NoiseDNS 隧道，支持 SOCKS5 / SSH 认证及自动检测认证方式
+- ✅ **DNS Scan** — 全新轻量级扫描模式：只需输入域名、设置并发数即可开始扫描 — 无需代理测试、无需认证。自动测试安全性、DNS 类型、延迟、解析 IP、EDNS0 等
 
----
+**🔀 全新扫描策略 — 双向多范围扫描**
+- ✅ 扫描器现从每个 IP 范围的**首尾两端**同时扫描，跨多个范围进行，结合随机混洗 — 与线性扫描相比，性能更快，发现可用 DNS 服务器的概率更高
 
-#### 🚀 v1.4.2
+**🧪 自动 DNS 类型检测 + 评分**
+- ✅ 所有 DNS 类型（A、AAAA、MX、TXT、NS）自动测试并为每台服务器评分 — 与 SlipNet 扫描器相同的评分系统
 
-**📦 Android / ARM 发布二进制文件**
-- ✅ **`pydns-scanner-linux-aarch64`** — 预构建的 ARM64 二进制文件，适用于 Linux ARM64 服务器、树莓派和通过 proot-distro 的 Android
-- ✅ **`pydns-scanner-linux-arm`** — 预构建的 ARMv7 二进制文件，适用于 32 位 ARM 设备
-- ✅ GitHub Actions 现通过 QEMU 仿真构建 ARM 可执行文件，与 Windows、Linux x86_64 和 macOS 并行
+**⚙️ 全新高级设置区**
+完全可定制的扫描参数：
+- 🔧 代理测试最低 ping 阈值
+- 🔧 DNS 连接超时
+- 🔧 代理端到端测试超时
+- 🔧 并行代理测试数量
+- 🔧 自定义混洗步长
+- 🔧 代理测试 URL + 预期响应状态码
+- 🔧 设置 MTU（实验性操作系统级 MTU 覆盖）
+- 🔧 SlipNet 查询大小（DNSTT / NoiseDNS）
 
-**📦 PyPI：Android / Termux 无缝安装**
-- ✅ **可选 C 扩展依赖** — `google-re2`、`orjson` 和 `pyperclip` 从必需依赖移至可选额外包（`pip install pydns-scanner[full]`）；核心 `pip install pydns-scanner` 现可在 Termux 上干净安装，无构建失败
-- ✅ 代码已自动回退至标准库等价物（`re`、`json`、空操作剪贴板）
+**🎨 用户体验改进**
+- ✅ 增强的扫描统计显示
+- ✅ 改进的结果表格书写与格式
+- ✅ 全新代理测试状态界面，提供实时反馈
+- ✅ 更好的过滤 IP 检测
+- ✅ 日志区域始终可见（不再可切换）
 
----
+**🔧 实验性功能：设置操作系统 MTU**
+- ✅ 使用指定的 MTU 值进行扫描 — 用于高级网络调优的实验性功能
 
-#### 🚀 v1.4.1
+**⚡ 性能**
+- ✅ 扫描性能大幅提升
+- ✅ 自动检测 SlipNet 认证方式（DNSTT / NoiseDNS）
 
-**🤖 Android / Termux 兼容性**
-- ✅ **平台感知导入** — 在 Android/Termux 上自动跳过 `google-re2` 和 `pyperclip`；分别回退至标准库 `re` 和空操作剪贴板包装器
-- ✅ **Termux 零崩溃** — 无需手动删除任何包，应用现可在 Termux 上正常启动
-
-**🐛 缺陷修复**
-- 🔎 **已解析 IP 列** — 此前无论配置的扫描域名是什么，始终解析 `google.com`；现已正确解析扫描配置中输入的域名
-
----
-
-#### 🚀 v1.4.0
-
-**🎨 重新设计的启动菜单**
-- ✅ 配置界面全面重新设计，布局更简洁，视觉层次更清晰
-- ✅ 可选日志面板 — 默认隐藏；扫描期间按 `L` 键切换显示/隐藏
-
-**🗂️ 三种扫描模式**
-三种模式使用完全相同的扫描逻辑，区别仅在于从 CIDR 文件中读取的最大 IP 数量及**混洗步长**：若在连续该数量的 IP 中未发现可用 DNS，则剩余范围将自动重新混洗，避免遗漏分散在大子网中的服务器。
-- 🚀 **Quick Scan（快速扫描）** — 最多 **25,000 个 IP**，每 **500** 个 IP 混洗一次
-- 🔍 **Deep Scan（深度扫描）** — 最多 **50,000 个 IP**，每 **1,000** 个 IP 混洗一次
-- 🔬 **Full Scan（完整扫描）** — **不限 IP 数量**（整个文件），每 **3,000** 个 IP 混洗一次
-
-**🔐 安全测试**
-- 🚨 **劫持检测** — 检测 DNS 服务器是否拦截或重定向查询
-- 🚫 **过滤检测** — 识别静默屏蔽特定域名的服务器
-- 🌍 **开放解析器检查** — 标记解析任意外部查询的服务器
-- 🔒 **DNSSEC 验证** — 报告服务器是否返回已签名（DNSSEC）的响应
-
-**🌐 网络分析列**
-- 🔎 **已解析 IP** — 每个候选 DNS 服务器解析 `google.com`，结果 IP 显示在结果表中
-- 📡 **ISP 检测** — 通过 ip-api.com 获取每台服务器的 AS 号和组织名称（限速、异步）
-- 🌍 **IPv4 / IPv6 检测** — 显示每台服务器支持的 IP 版本
-- 📶 **EDNS0 检测** — 测试并显示 EDNS0 扩展支持情况
-- 🔀 **TCP / UDP 列** — 测试并显示支持的传输协议
-
-**🔌 Slipstream Rust Plus — 改进的代理测试**
-- ⬆️ **升级至 Slipstream Rust Plus 客户端** — 所有平台二进制文件速度显著提升
-- ✅ **HTTPS CONNECT 隧道** — 代理测试现通过 HTTP CONNECT 访问 `https://www.google.com`；旧版纯 HTTP 探测始终返回"Failed"
-- ✅ **独立 SOCKS5 测试** — SOCKS5 单独测试，而非仅作为回退方案
-- ✅ **消除误报** — 改进的结果验证去除错误的通过/失败结果
-- 🧮 **智能多键排序** — 排序顺序：代理通过 → DNSSEC → 最快 ping
-
-**🗃️ 结果表格全面升级**
-- 📐 **新列布局** — 移除端口列；顺序：Ping → [Proxy] → IPv4/IPv6 → Security → TCP/UDP → EDNS0 → Resolved IP → ISP
-- 📊 **实时通过/失败计数器** — 统计栏在整个扫描过程中正确更新
-- 💾 **CSV 输出** — 结果保存为 `TIMESTAMP.csv`；列根据已启用的测试自动调整（仅在启用对应测试时包含 Proxy Test、Security、EDNS0 列）
-
-**🐛 缺陷修复**
-- 📁 **自定义 CIDR 选择** — 修复了在扫描菜单中选择自定义 IP 范围文件未正确应用的问题
-- 🔢 **/31 和 /32 子网修复** — 此前这些子网的 IP 被静默跳过
-- 🔓 **ISP 锁挂起修复** — 速率限制锁在休眠前释放，消除流水线停滞
-
-**⚡ 性能与模块改进**
-- 🚄 **`google-re2`** — 将 Python 标准库 `re` 替换为 Google RE2 引擎，正则处理更快更安全
-- 🔁 **每次测试独立 aiodns 解析器** — 为每个 DNS 测试创建独立解析器，防止 C-ares 并发挂起
-- 📐 **基于范围的 IP 混洗** — 对大 CIDR 范围使用整数运算替代 `list(subnet.hosts())`
-- 🚦 **ISP 速率限制器** — ip-api.com 请求受异步锁限制 + 429 错误自动重试（60 秒退避）
-- ⚠️ **Windows 套接字提示** — 并发数超过 64 时记录警告（Windows 选择器事件循环上限）
+**⚙️ Bug 修复**
+- 🔧 修复扫描大型 DNS 范围后 UI 冻结的问题
+- 🔧 修复扫描超过 50 万个 IP 后速度下降的问题
+- 🔧 修复长时间运行扫描时的内存泄漏
+- 🔧 更新依赖以解决 Dependabot 低危漏洞警报
 
 ---
 

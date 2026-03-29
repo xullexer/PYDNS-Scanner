@@ -31,86 +31,83 @@
 
 <div align="center">
   <strong>A modern, high-performance DNS scanner with a beautiful Terminal User Interface (TUI) built with Textual.</strong><br>
-  This tool can scan millions of IP addresses to find working DNS servers with optional Slipstream proxy testing and automatic multi-platform client download.<br>
+  This tool can scan millions of IP addresses to find working DNS servers with optional Slipstream / SlipNet (DNSTT, NoiseDNS) proxy testing, automatic DNS type scoring, and multi-platform client download.<br>
   <br>
-  <strong>🆕 v1.4.0: Resolved IP column, smart multi-key sorting, proxy HTTPS-CONNECT fix, performance improvements!</strong>
+  <strong>🆕 v2.0.0: SlipNet support, DNS Scan mode, bidirectional multi-range scanning, Advanced settings, and major performance boost!</strong>
 </div>
 
-## 🎉 What's New in v1.4.0
+## 🎉 What's New in v2.0.0
 
-### 🎨 Redesigned Start Menu
-- **Better UI** - Completely redesigned configuration screen with cleaner layout and improved visual hierarchy
-- **Optional log panel** - Log output is hidden by default; press `L` at any time during a scan to toggle it on or off
+### 🌐 Three Scan Modes
+- **Slipstream** — Classic proxy testing with SOCKS5 support
+- **SlipNet** — Full SlipNet configs support for DNSTT and NoiseDNS tunnels with SOCKS5 / SSH authentication and auto-detected auth method
+- **DNS Scan** — New lightweight mode: just insert a domain, set concurrency, and scan — no proxy testing, no authentication. Tests security, DNS types, ping, resolved IP, EDNS0, and more
 
-### 🗂️ Three Scan Modes
-All three modes use identical scan logic. They differ only in how many IPs are read from the CIDR file and the **shuffle step** — if no working DNS is found within that many consecutive IPs, the remaining range is automatically reshuffled to avoid missing servers hidden deep in a subnet.
-- **Quick Scan** — up to 25,000 IPs, shuffle step every 500 IPs
-- **Deep Scan** — up to 50,000 IPs, shuffle step every 1,000 IPs
-- **Full Scan** — unlimited IPs (entire file), shuffle step every 3,000 IPs
+### 🔀 New Scan Strategy — Bidirectional Multi-Range
+Scanner now scans from the **start and end** of each IP range simultaneously across multiple ranges, combined with random shuffle — faster performance and higher chance of finding working DNS servers compared to linear scanning.
 
-### 🔐 Security Testing
-- **Hijack detection** - Detects if the DNS server is intercepting or redirecting queries
-- **Filtered detection** - Identifies servers that silently block certain domains
-- **Open resolver check** - Flags servers that resolve arbitrary external queries
-- **DNSSEC validation** - Reports whether the server returns signed (DNSSEC) responses
+### 🧪 Auto DNS Type Check + Scoring
+All DNS types (A, AAAA, MX, TXT, NS) are automatically tested and scored per server — same scoring system as the SlipNet scanner.
 
-### 🌐 Network Analysis Columns
-- **Resolved IP** - Each candidate DNS server is used to resolve `google.com`; the resulting IP is shown in the results table
-- **ISP detection** - Displays AS number and organisation name for each DNS server via ip-api.com (rate-limited, async)
-- **IPv4 / IPv6 detection** - Shows whether the server responds on IPv4, IPv6, or both
-- **EDNS0 detection** - Tests and displays EDNS0 extension support
-- **TCP / UDP column** - Tests and shows which transports the server supports
+### ⚙️ New Advanced Section
+Fully customizable scanning parameters:
+- Minimum proxy ping threshold for proxy test
+- DNS connection timeout
+- Proxy end-to-end test timeout
+- Parallel proxy test count
+- Custom shuffle steps
+- Proxy test URL + expected response status code
+- Set MTU (experimental OS-level MTU override)
+- Query size for SlipNet (DNSTT / NoiseDNS)
 
-### 🔌 Slipstream Rust Plus — Improved Proxy Testing
-- **Upgraded to Slipstream Rust Plus client** ([Fox-Fig/slipstream-rust-plus-deploy](https://github.com/Fox-Fig/slipstream-rust-plus-deploy)) — significantly faster binaries across all platforms
-- **HTTPS CONNECT tunnel** - Proxy test now targets `https://www.google.com` via HTTP CONNECT; the previous plain-HTTP probe always returned "Failed"
-- **Independent SOCKS5 test** - SOCKS5 is tested on its own, not just as a fallback
-- **False-positive elimination** - Improved result validation removes incorrect pass/fail determinations
-- **Smart multi-key sort** - Results ordered by: Proxy pass → DNSSEC → fastest ping
+### 🎨 UX Improvements
+- **Enhanced scan statistics** — Redesigned stats display with clearer layout
+- **Better result table** — Improved writing and formatting in the results table
+- **New proxy test status UI** — Real-time proxy test feedback
+- **Better Filtered IP detection** — More accurate identification of filtered IPs
+- **Log section always visible** — Log panel is no longer toggleable; always shown during scans
 
-### 🗃️ Results Table Overhaul
-- **New column layout** - Port column removed; column order: Ping → [Proxy] → IPv4/IPv6 → Security → TCP/UDP → EDNS0 → Resolved IP → ISP
-- **Live pass/fail counters** - Statistics bar updates correctly throughout the scan
+### 🔧 Experimental: Set OS MTU
+Scan with a specified MTU value for advanced network tuning.
 
-### 🐛 Bug Fixes
-- **Custom CIDR selection** - Fixed a bug where selecting a custom IP range file in the scan menu was not applied correctly
-- **/31 and /32 subnet fix** - IPs from these subnets were previously skipped silently
-- **ISP lock hang** - Rate-limit lock is now released before sleeping, eliminating pipeline stalls
+### ⚡ Performance
+- Significantly higher scan performance overall
+- Auto detect auth method for SlipNet (DNSTT / NoiseDNS)
 
-### ⚡ Performance & Module Improvements
-- **`google-re2`** - Replaced Python's stdlib `re` with Google's RE2 engine for faster, safer regex
-- **Per-test aiodns resolver** - Each DNS test creates its own resolver, preventing C-ares concurrency hangs
-- **Range-based IP shuffle** - Integer arithmetic replaces `list(subnet.hosts())` for large CIDR ranges
-- **ISP rate limiter** - ip-api.com capped with async lock + automatic 429 retry with 60 s backoff
-- **Windows socket advisory** - Warning logged when concurrency exceeds 64 (Windows selector event-loop cap)
+### ⚙️ Bug Fixes
+- Fixed UI freeze after scanning large DNS ranges
+- Fixed speed drop after 500K+ scanned IPs
+- Fixed memory leak during long-running scans
+- Updated dependencies to resolve Dependabot low-severity vulnerability alerts
 
 ## ✨ Features
 
-- 🎨 **Redesigned Start Menu** - Clean, modern configuration screen with improved layout
-- 🗂️ **Three Scan Modes** - Quick (25K IPs, step 500), Deep (50K IPs, step 1K), Full (unlimited, step 3K) — same logic, different scale
-- 🔄 **Auto-Shuffle** - Reshuffles remaining IPs automatically when no working DNS is found within the step range
-- 🔐 **Security Testing** - Detects hijacked, filtered, open resolver, and DNSSEC per server
-- 🌐 **Resolved IP Column** - Tests each DNS server by resolving `google.com`, result shown in table
-- 📡 **ISP Detection** - AS number and organisation name via ip-api.com
-- 🌍 **IPv4 / IPv6 Detection** - Reports which IP versions each server supports
-- 📶 **EDNS0 Detection** - Tests and displays EDNS0 extension support
-- 🔌 **Slipstream Rust Plus** - Faster proxy testing with false-positive fixes and independent SOCKS5 test
-- 🧮 **Smart Multi-key Sort** - Auto-sorts by proxy pass → DNSSEC → ping for best servers first
-- ⚡ **High Performance** - Asynchronous scanning with configurable concurrency
-- ⏸️ **Pause / Resume / Shuffle** - Full live scan control
-- 📊 **Real-time Statistics** - Live pass/fail/found counters updated throughout the scan
-- 🔍 **Smart DNS Detection** - Detects working DNS servers even with NXDOMAIN / NODATA responses
-- 🎲 **Random Subdomain Support** - Avoid cached responses with random subdomains
-- 🌐 **Multiple DNS Types** - Supports A, AAAA, MX, TXT, NS records
-- 📝 **Optional Log Panel** - Hidden by default; press `L` during scan to toggle
-- 🌍 **Multi-Platform Auto-Download** - Automatically downloads the correct Slipstream client for your platform
-- 📥 **Resume Downloads** - Smart download resume on network interruptions with retry logic
-- 💾 **Auto-save Results** - Automatic CSV export with per-server detail
-- 📁 **CIDR Management** - Built-in Iran IPs + custom file picker (bug-fixed)
-- ⚙️ **Configurable** - Adjustable concurrency, timeouts, and filters
-- 🚀 **Memory Efficient** - Streaming IP generation without loading all IPs into memory
-- 🚄 **google-re2** - Google's RE2 engine for faster, safer regex matching
-- 🔔 **Audio Alerts** - Optional sparkle sound on successful proxy test
+- � **Three Scan Modes** — Slipstream (proxy test), SlipNet (DNSTT / NoiseDNS tunnels), DNS Scan (lightweight, no proxy/auth)
+- 🔀 **Bidirectional Multi-Range Scan** — Scans from start and end of each IP range simultaneously with random shuffle for faster discovery
+- 🧪 **Auto DNS Type Scoring** — All DNS types (A, AAAA, MX, TXT, NS) tested and scored automatically per server
+- ⚙️ **Advanced Settings** — Customize proxy ping threshold, DNS timeout, proxy E2E timeout, parallel proxy count, shuffle steps, test URL, MTU, and query size
+- 🔐 **Security Testing** — Detects hijacked, filtered, open resolver, and DNSSEC per server
+- 🌐 **Resolved IP Column** — Tests each DNS server by resolving `google.com`, result shown in table
+- 📡 **ISP Detection** — AS number and organisation name via ip-api.com
+- 🌍 **IPv4 / IPv6 Detection** — Reports which IP versions each server supports
+- 📶 **EDNS0 Detection** — Tests and displays EDNS0 extension support
+- 🔌 **Slipstream Rust Plus** — Faster proxy testing with false-positive fixes and independent SOCKS5 test
+- 🔗 **SlipNet Support** — DNSTT / NoiseDNS tunnel testing with SOCKS5 / SSH auth and auto-detected auth method
+- 🧮 **Smart Multi-key Sort** — Auto-sorts by proxy pass → DNSSEC → ping for best servers first
+- ⚡ **High Performance** — Asynchronous scanning with configurable concurrency
+- ⏸️ **Pause / Resume / Shuffle** — Full live scan control
+- 📊 **Real-time Statistics** — Live pass/fail/found counters updated throughout the scan
+- 🔍 **Smart DNS Detection** — Detects working DNS servers even with NXDOMAIN / NODATA responses
+- 🎲 **Random Subdomain Support** — Avoid cached responses with random subdomains
+- 🌐 **Multiple DNS Types** — Supports A, AAAA, MX, TXT, NS records
+- 📝 **Always-on Log Panel** — Log section is always visible during scans
+- 🌍 **Multi-Platform Auto-Download** — Automatically downloads the correct Slipstream client for your platform
+- 📥 **Resume Downloads** — Smart download resume on network interruptions with retry logic
+- 💾 **Auto-save Results** — Automatic CSV export with per-server detail
+- 📁 **CIDR Management** — Built-in Iran IPs + custom file picker
+- 🚀 **Memory Efficient** — Streaming IP generation without loading all IPs into memory
+- 🔔 **Audio Alerts** — Optional sparkle sound on successful proxy test
+- 🔧 **Experimental MTU** — Set OS-level MTU for advanced network scanning
 
 ## 📋 Requirements
 
@@ -282,7 +279,7 @@ This will launch the interactive TUI where you can configure:
 - **DNS Type**: Record type (A, AAAA, MX, TXT, NS)
 - **Concurrency**: Number of parallel workers (default: 100)
 - **Random Subdomain**: Add random prefix to avoid cached responses
-- **Slipstream Test**: Enable proxy testing for found DNS servers
+- **Scan Mode**: Choose Slipstream (proxy test), SlipNet (DNSTT/NoiseDNS), or DNS Scan (lightweight)
 
 ### CIDR File Format
 
@@ -333,7 +330,6 @@ Create a text file with one CIDR range per line:
 | `q` | Anytime | Quit application |
 | `c` | While scanning | Save results |
 | `p` | While scanning | Pause scan |
-| `l` | While scanning | Toggle log panel |
 | `r` | When paused | Resume scan |
 | `x` | When paused | Shuffle remaining IPs |
 
@@ -567,6 +563,8 @@ This project is licensed under the MIT License.
 - Built with [Textual](https://github.com/Textualize/textual) by Textualize
 - DNS resolution via [aiodns](https://github.com/saghul/aiodns)
 - Inspired by the need for efficient DNS server discovery
+- Thanks to **anonvector** for support and contributions
+- Python codebase is now **modular** and easier to develop and maintain
 
 ## 📈 Performance Notes
 

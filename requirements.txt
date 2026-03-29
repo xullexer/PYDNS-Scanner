@@ -13,8 +13,7 @@
 textual>=0.47.0
 
 # Async DNS Resolution
-aiodns>=3.1.0
-pycares>=4.3.0
+dnspython>=2.4.0
 
 # HTTP Client for Slipstream Proxy Testing (with SOCKS5 support)
 httpx[socks]>=0.25.0

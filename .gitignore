@@ -12,3 +12,6 @@ build/
 *.egg-info/
 .pytest_cache/
 agents/
+releases/
+isp_cache.json
+*.log

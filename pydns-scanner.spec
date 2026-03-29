@@ -1,27 +1,51 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
 
 block_cipher = None
 
+# Collect all submodules for packages that rely on dynamic imports
+textual_hidden  = collect_submodules('textual')
+dns_hidden      = collect_submodules('dns')
+rich_hidden     = collect_submodules('rich')
+textual_datas   = collect_data_files('textual')   # CSS / widget assets
+
+scanner_hidden = [
+    'scanner',
+    'scanner.config_mixin',
+    'scanner.constants',
+    'scanner.extra_tests',
+    'scanner.ip_streaming',
+    'scanner.isp_cache',
+    'scanner.proxy_testing',
+    'scanner.results',
+    'scanner.slipstream',
+    'scanner.slipnet',
+    'scanner.utils',
+    'scanner.widgets',
+    'scanner.worker_pool',
+]
+
+extra_hidden = [
+    'aiodns',
+    'httpx',
+    'loguru',
+    'pyperclip',
+    '_cffi_backend',
+]
+
+all_hidden = textual_hidden + dns_hidden + rich_hidden + scanner_hidden + extra_hidden
+
 a = Analysis(
     ['python/dnsscanner_tui.py'],
-    pathex=[],
+    pathex=['python'],
     binaries=[],
     datas=[
         ('python/iran-ipv4.cidrs', '.'),
         ('python/slipstream-client', 'slipstream-client'),
+        ('python/slipnet-client', 'slipnet-client'),
+        *textual_datas,
     ],
-    hiddenimports=[
-        'textual',
-        'textual.widgets',
-        'textual.app',
-        'textual.containers',
-        'textual.reactive',
-        'aiodns',
-        'httpx',
-        'loguru',
-        'rich',
-        'pyperclip',
-    ],
+    hiddenimports=all_hidden,
     hookspath=['./'],
     hooksconfig={},
     runtime_hooks=[],
