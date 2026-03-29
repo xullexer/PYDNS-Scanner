@@ -125,6 +125,23 @@ jobs:
       
       - name: Build package
         run: python -m build
+
+      - name: Validate tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python - << 'PY'
+          import os
+          import pathlib
+          import tomllib
+
+          ref = os.environ.get("GITHUB_REF", "")
+          tag = ref.rsplit("/", 1)[-1].lstrip("v")
+          data = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+          version = data["project"]["version"]
+          if tag != version:
+              raise SystemExit(f"Tag/version mismatch: tag={tag} pyproject={version}")
+          print(f"Tag/version validated: {version}")
+          PY
       
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1

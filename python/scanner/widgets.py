@@ -62,7 +62,7 @@ class VersionedFooter(TextualFooter):
 
     def compose(self) -> ComposeResult:
         yield from super().compose()
-        yield Static("v2.0.1", classes="footer-version")
+        yield Static("v2.0.2", classes="footer-version")
 
 
 class StatsWidget(Widget):
