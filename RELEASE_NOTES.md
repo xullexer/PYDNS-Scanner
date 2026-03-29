@@ -50,6 +50,9 @@ Fully customizable scanning parameters:
 - 🔧 Fixed memory leak during long-running scans
 - 🔧 Updated dependencies to resolve Dependabot low-severity vulnerability alerts
 
+**🙏 Acknowledgment**
+- 👏 SlipNet client binaries bundled in this release are developed by [**anonvector**](https://github.com/anonvector) — thanks for building the **SlipNet CLI**
+
 ---
 
 ### 🇮🇷 فارسی
@@ -98,6 +101,9 @@ Fully customizable scanning parameters:
 - 🔧 رفع نشت حافظه در اسکن‌های طولانی
 - 🔧 به‌روزرسانی وابستگی‌ها برای رفع هشدارهای آسیب‌پذیری کم‌شدت Dependabot
 
+**🙏 قدردانی**
+- 👏 باینری‌های کلاینت SlipNet موجود در این نسخه توسط [**anonvector**](https://github.com/anonvector) توسعه داده شده است — با تشکر برای ساخت **SlipNet CLI**
+
 ---
 
 ### 🇨🇳 中文
@@ -145,6 +151,9 @@ Fully customizable scanning parameters:
 - 🔧 修复扫描超过 50 万个 IP 后速度下降的问题
 - 🔧 修复长时间运行扫描时的内存泄漏
 - 🔧 更新依赖以解决 Dependabot 低危漏洞警报
+
+**🙏 致谢**
+- 👏 本版本中包含的 SlipNet 客户端二进制文件由 [**anonvector**](https://github.com/anonvector) 开发 — 感谢其构建 **SlipNet CLI**
 
 ---
 

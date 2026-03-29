@@ -170,6 +170,31 @@ pyperclip>=1.8.0      # پشتیبانی کلیپ‌بورد (در صورت نب
 
 این آرشیوها شامل کلاینت‌های لینوکس، ویندوز و مک در یک دانلود هستند.
 
+### اختیاری
+- **کلاینت SlipNet** — برای تست تونل SlipNet (DNSTT / NoiseDNS)
+  - **دانلود خودکار**: برنامه به صورت خودکار پلتفرم شما را تشخیص داده و کلاینت SlipNet مناسب را دانلود می‌کند
+  - **تشخیص هوشمند**: تشخیص نصب‌های موجود
+  - **پشتیبانی از ادامه**: دانلودهای ناقص ذخیره شده و در تلاش مجدد ادامه می‌یابند
+  - پلتفرم‌های پشتیبانی شده:
+    - Linux (x86_64): `slipnet-linux-amd64`
+    - Linux (ARM64): `slipnet-linux-arm64`
+    - Windows (x86_64): `slipnet-windows-amd64.exe`
+    - macOS (ARM64): `slipnet-darwin-arm64`
+    - macOS (Intel): `slipnet-darwin-amd64`
+  - دانلود دستی از: [anonvector](https://github.com/anonvector/SlipNet/releases)
+
+### 📦 کلاینت‌های SlipNet همراه
+
+باینری‌های کامپایل‌شده کلاینت SlipNet (توسط [anonvector](https://github.com/anonvector/SlipNet/releases)) برای همه پلتفرم‌ها در پوشه `slipnet-client/` موجود است:
+
+| پلتفرم | مسیر | توضیحات |
+|--------|------|----------|
+| **Linux x86_64** | `slipnet-client/linux/slipnet-linux-amd64` | باینری لینوکس x86_64 |
+| **Linux ARM64** | `slipnet-client/linux/slipnet-linux-arm64` | باینری لینوکس ARM64 (رزبری پای، سرورهای ARM) |
+| **Windows** | `slipnet-client/windows/slipnet-windows-amd64.exe` | فایل اجرایی ویندوز x86_64 |
+| **macOS ARM** | `slipnet-client/mac/slipnet-darwin-arm64` | مک با تراشه اپل سیلیکون (M1/M2/M3/M4) |
+| **macOS Intel** | `slipnet-client/mac/slipnet-darwin-amd64` | مک با پردازنده اینتل x86_64 |
+
 ## 🚀 نصب
 
 ### روش ۱: نصب از PyPI (توصیه شده)
@@ -397,6 +422,51 @@ DNS,Ping (ms),IPv4/IPv6,TCP/UDP,Security,EDNS0,Resolved IP,ISP
 - **کنترل سمافور**: محدود کردن عملیات همزمان برای جلوگیری از اتمام منابع
 - **نگاشت حافظه**: خواندن سریع فایل CIDR با استفاده از mmap در صورت امکان
 
+## 📂 ساختار پروژه
+
+```
+PYDNS-Scanner/
+├── README.md                          # مستندات انگلیسی
+├── README-FA.md                       # مستندات فارسی
+├── README-ZH.md                       # مستندات چینی
+├── RELEASE_NOTES.md                   # یادداشت‌های انتشار (EN / FA / ZH)
+├── pyproject.toml                     # پیکربندی بسته پایتون
+├── requirements.txt                   # وابستگی‌های پایتون
+├── pydns-scanner.spec                 # مشخصات ساخت PyInstaller
+├── python/
+│   ├── __init__.py                    # آغازگر بسته
+│   ├── __main__.py                    # نقطه ورود (pydns-scanner CLI)
+│   ├── dnsscanner_tui.py             # برنامه اصلی TUI
+│   ├── iran-ipv4.cidrs               # فایل CIDR نمونه ایران
+│   ├── requirements.txt               # وابستگی‌های پایتون (سورس)
+│   ├── scanner/                       # بسته اسکنر ماژولار
+│   │   ├── __init__.py
+│   │   ├── config_mixin.py           # میکسین پیکربندی TUI
+│   │   ├── constants.py              # ثابت‌های مشترک
+│   │   ├── extra_tests.py            # تست‌های امنیتی و EDNS0
+│   │   ├── ip_streaming.py           # تولید IP جریانی از CIDR
+│   │   ├── isp_cache.py              # تشخیص و کش ISP
+│   │   ├── proxy_testing.py          # تست پروکسی Slipstream
+│   │   ├── results.py                # قالب‌بندی نتایج و خروجی CSV
+│   │   ├── slipnet.py                # تست SlipNet (DNSTT/NoiseDNS)
+│   │   ├── slipstream.py            # مدیریت کلاینت Slipstream
+│   │   ├── utils.py                  # توابع کمکی
+│   │   ├── widgets.py                # ویجت‌های سفارشی TUI
+│   │   └── worker_pool.py           # پول کارگر غیرهمزمان
+│   ├── slipstream-client/            # باینری‌های Slipstream همراه
+│   │   ├── linux/
+│   │   ├── windows/
+│   │   ├── mac/
+│   │   └── android/
+│   └── slipnet-client/               # باینری‌های SlipNet همراه
+│       ├── linux/
+│       ├── windows/
+│       └── mac/
+├── results/                           # نتایج اسکن (تولید خودکار)
+├── logs/                              # لاگ‌ها (هنگام فعال‌سازی)
+└── static/                            # منابع ثابت
+```
+
 ## 🌍 یافتن لیست‌های CIDR
 
 ### محدوده IP کشورها
@@ -472,7 +542,7 @@ python dnsscanner_tui.py
 - ساخته شده با [Textual](https://github.com/Textualize/textual) توسط Textualize
 - حل DNS از طریق [aiodns](https://github.com/saghul/aiodns)
 - الهام گرفته از نیاز به کشف کارآمد سرور DNS
-- با تشکر از **anonvector** برای حمایت و مشارکت
+- با تشکر از [**anonvector**](https://github.com/anonvector) برای توسعه **SlipNet CLI** — باینری‌های کلاینت SlipNet موجود در این پروژه حاصل کار ایشان است
 - کد پایتون اکنون **ماژولار** است و توسعه و نگهداری آن آسان‌تر شده است
 
 ## 📈 یادداشت‌های عملکرد

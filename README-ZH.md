@@ -158,6 +158,31 @@ pyperclip>=1.8.0      # 剪贴板支持（缺少时自动禁用）
 
 > **⚠️ Windows 注意：** Windows 客户端需要 OpenSSL DLL 文件（`libcrypto-3-x64.dll` 和 `libssl-3-x64.dll`），已放置在 `slipstream-client/windows/` 目录中。使用自动下载时，这些文件会与 Windows 可执行文件一起自动下载。
 
+### 可选
+- **SlipNet 客户端** — 用于 SlipNet（DNSTT / NoiseDNS）隧道测试
+  - **自动下载**：程序会自动检测您的平台并下载合适的 SlipNet 客户端
+  - **智能检测**：检测已有安装
+  - **断点续传**：未完成的下载保存为 `.partial` 文件，重新运行时自动续传
+  - 支持的平台：
+    - Linux (x86_64)：`slipnet-linux-amd64`
+    - Linux (ARM64)：`slipnet-linux-arm64`
+    - Windows (x86_64)：`slipnet-windows-amd64.exe`
+    - macOS (ARM64)：`slipnet-darwin-arm64`
+    - macOS (Intel)：`slipnet-darwin-amd64`
+  - 手动下载：[anonvector](https://github.com/anonvector/SlipNet/releases)
+
+### 📦 随附的 SlipNet 客户端
+
+由 [anonvector](https://github.com/anonvector/SlipNet/releases) 开发的预编译 SlipNet 客户端二进制文件已包含在 `slipnet-client/` 目录中：
+
+| 平台 | 路径 | 说明 |
+|------|------|------|
+| **Linux x86_64** | `slipnet-client/linux/slipnet-linux-amd64` | Linux x86_64 二进制文件 |
+| **Linux ARM64** | `slipnet-client/linux/slipnet-linux-arm64` | Linux ARM64 二进制文件（树莓派、ARM 服务器） |
+| **Windows** | `slipnet-client/windows/slipnet-windows-amd64.exe` | Windows x86_64 可执行文件 |
+| **macOS ARM** | `slipnet-client/mac/slipnet-darwin-arm64` | Apple Silicon Mac（M1/M2/M3/M4） |
+| **macOS Intel** | `slipnet-client/mac/slipnet-darwin-amd64` | Intel x86_64 Mac |
+
 ## 🚀 安装
 
 ### 方式一：从 PyPI 安装（推荐）
@@ -385,6 +410,51 @@ DNS,Ping (ms),IPv4/IPv6,TCP/UDP,Security,EDNS0,Resolved IP,ISP
 - **信号量控制**：限制并发操作以防止资源耗尽
 - **内存映射**：尽可能使用 mmap 快速读取 CIDR 文件
 
+## 📂 项目结构
+
+```
+PYDNS-Scanner/
+├── README.md                          # 英文文档
+├── README-FA.md                       # 波斯语文档
+├── README-ZH.md                       # 中文文档
+├── RELEASE_NOTES.md                   # 发行说明（EN / FA / ZH）
+├── pyproject.toml                     # Python 包配置
+├── requirements.txt                   # Python 依赖
+├── pydns-scanner.spec                 # PyInstaller 构建规格
+├── python/
+│   ├── __init__.py                    # 包初始化
+│   ├── __main__.py                    # 入口点（pydns-scanner CLI）
+│   ├── dnsscanner_tui.py             # 主 TUI 程序
+│   ├── iran-ipv4.cidrs               # 示例伊朗 CIDR 文件
+│   ├── requirements.txt               # Python 依赖（源码）
+│   ├── scanner/                       # 模块化扫描器包
+│   │   ├── __init__.py
+│   │   ├── config_mixin.py           # TUI 配置 Mixin
+│   │   ├── constants.py              # 共享常量
+│   │   ├── extra_tests.py            # 安全 & EDNS0 测试
+│   │   ├── ip_streaming.py           # 从 CIDR 流式生成 IP
+│   │   ├── isp_cache.py              # ISP 检测与缓存
+│   │   ├── proxy_testing.py          # Slipstream 代理测试
+│   │   ├── results.py                # 结果格式化及 CSV 导出
+│   │   ├── slipnet.py                # SlipNet（DNSTT/NoiseDNS）测试
+│   │   ├── slipstream.py            # Slipstream 客户端管理
+│   │   ├── utils.py                  # 工具函数
+│   │   ├── widgets.py                # 自定义 TUI 组件
+│   │   └── worker_pool.py           # 异步工作池
+│   ├── slipstream-client/            # 随附的 Slipstream 二进制文件
+│   │   ├── linux/
+│   │   ├── windows/
+│   │   ├── mac/
+│   │   └── android/
+│   └── slipnet-client/               # 随附的 SlipNet 二进制文件
+│       ├── linux/
+│       ├── windows/
+│       └── mac/
+├── results/                           # 扫描结果（自动生成）
+├── logs/                              # 应用日志（启用时）
+└── static/                            # 静态资源
+```
+
 ## 🌍 获取 CIDR 列表
 
 ### 国家 IP 范围
@@ -460,7 +530,7 @@ python dnsscanner_tui.py
 - 基于 [Textual](https://github.com/Textualize/textual)（由 Textualize 出品）构建
 - DNS 解析通过 [aiodns](https://github.com/saghul/aiodns) 实现
 - 灵感来源于对高效 DNS 服务器发现工具的需求
-- 感谢 **anonvector** 的支持与贡献
+- 感谢 [**anonvector**](https://github.com/anonvector) 开发 **SlipNet CLI** — 本项目中包含的 SlipNet 客户端二进制文件来自他们的工作
 - Python 代码现已实现**模块化**，更易于开发与维护
 
 ## 📈 性能说明

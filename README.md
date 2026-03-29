@@ -167,6 +167,31 @@ For convenience, compressed archives containing all platform binaries are availa
 
 These archives include Linux, Windows, and macOS clients in a single download.
 
+### Optional
+- **SlipNet Client** — For SlipNet (DNSTT / NoiseDNS) tunnel testing
+  - **Automatic Download**: The application automatically detects your platform and downloads the correct SlipNet client
+  - **Smart Detection**: Detects existing installations
+  - **Resume Support**: Partial downloads are saved and can be resumed on retry
+  - Supported platforms:
+    - Linux (x86_64): `slipnet-linux-amd64`
+    - Linux (ARM64): `slipnet-linux-arm64`
+    - Windows (x86_64): `slipnet-windows-amd64.exe`
+    - macOS (ARM64): `slipnet-darwin-arm64`
+    - macOS (Intel): `slipnet-darwin-amd64`
+  - Manual download available from: [anonvector releases](https://github.com/anonvector/SlipNet/releases)
+
+### 📦 Bundled SlipNet Clients
+
+Pre-compiled SlipNet client binaries (by [anonvector](https://github.com/anonvector/SlipNet/releases)) are included in the `slipnet-client/` folder for all platforms:
+
+| Platform | Path | Description |
+|----------|------|-------------|
+| **Linux x86_64** | `slipnet-client/linux/slipnet-linux-amd64` | Linux x86_64 binary |
+| **Linux ARM64** | `slipnet-client/linux/slipnet-linux-arm64` | Linux ARM64 binary (Raspberry Pi, ARM servers) |
+| **Windows** | `slipnet-client/windows/slipnet-windows-amd64.exe` | Windows x86_64 executable |
+| **macOS ARM** | `slipnet-client/mac/slipnet-darwin-arm64` | macOS Apple Silicon (M1/M2/M3/M4) |
+| **macOS Intel** | `slipnet-client/mac/slipnet-darwin-amd64` | macOS Intel x86_64 |
+
 ## 🚀 Installation
 
 ### Method 1: Install from PyPI (Recommended)
@@ -445,21 +470,49 @@ random:   a1b2c3d4.google.com
 **Use case**: Bypass cached DNS responses
 **Requirement**: Target domain should have wildcard DNS (`*.example.com`)
 
-## 📂 Directory Structure
+## 📂 Project Structure
 
 ```
 PYDNS-Scanner/
-├── README.md                   # This file
+├── README.md                          # English documentation
+├── README-FA.md                       # Farsi documentation
+├── README-ZH.md                       # Chinese documentation
+├── RELEASE_NOTES.md                   # Release notes (EN / FA / ZH)
+├── pyproject.toml                     # Python package configuration
+├── requirements.txt                   # Python dependencies
+├── pydns-scanner.spec                 # PyInstaller build spec
 ├── python/
-│   ├── dnsscanner_tui.py      # Main application
-│   ├── requirements.txt        # Python dependencies
-│   └── iran-ipv4.cidrs        # Sample CIDR file
-├── logs/                       # Application logs (when enabled, gitignored)
-├── results/                    # Scan results (gitignored)
-└── slipstream-client/          # Slipstream binaries (auto-downloaded, gitignored)
-    ├── windows/
-    ├── linux/
-    └── macos/
+│   ├── __init__.py                    # Package init
+│   ├── __main__.py                    # Entry point (pydns-scanner CLI)
+│   ├── dnsscanner_tui.py             # Main TUI application
+│   ├── iran-ipv4.cidrs               # Sample Iranian CIDR file
+│   ├── requirements.txt               # Python dependencies (source)
+│   ├── scanner/                       # Modular scanner package
+│   │   ├── __init__.py
+│   │   ├── config_mixin.py           # Configuration mixin for TUI
+│   │   ├── constants.py              # Shared constants
+│   │   ├── extra_tests.py            # Security & EDNS0 tests
+│   │   ├── ip_streaming.py           # Streaming IP generation from CIDR
+│   │   ├── isp_cache.py              # ISP detection & caching
+│   │   ├── proxy_testing.py          # Slipstream proxy testing
+│   │   ├── results.py                # Result formatting & CSV export
+│   │   ├── slipnet.py                # SlipNet (DNSTT/NoiseDNS) testing
+│   │   ├── slipstream.py            # Slipstream client management
+│   │   ├── utils.py                  # Utility functions
+│   │   ├── widgets.py                # Custom TUI widgets
+│   │   └── worker_pool.py           # Async worker pool
+│   ├── slipstream-client/            # Bundled Slipstream binaries
+│   │   ├── linux/
+│   │   ├── windows/
+│   │   ├── mac/
+│   │   └── android/
+│   └── slipnet-client/               # Bundled SlipNet binaries
+│       ├── linux/
+│       ├── windows/
+│       └── mac/
+├── results/                           # Scan results (auto-generated)
+├── logs/                              # Application logs (when enabled)
+└── static/                            # Static assets
 ```
 
 ## 🐛 Troubleshooting
@@ -563,7 +616,7 @@ This project is licensed under the MIT License.
 - Built with [Textual](https://github.com/Textualize/textual) by Textualize
 - DNS resolution via [aiodns](https://github.com/saghul/aiodns)
 - Inspired by the need for efficient DNS server discovery
-- Thanks to **anonvector** for support and contributions
+- Thanks to [**anonvector**](https://github.com/anonvector) for developing the **SlipNet CLI** — the SlipNet client binaries bundled in this project are from their work
 - Python codebase is now **modular** and easier to develop and maintain
 
 ## 📈 Performance Notes
