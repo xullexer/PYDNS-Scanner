@@ -47,10 +47,20 @@ try:
             return True
         except Exception:
             return False
+
+    def _read_from_clipboard() -> str:
+        try:
+            text = _pyperclip_mod.paste()
+            return text if isinstance(text, str) else ""
+        except Exception:
+            return ""
 except ImportError:
 
     def _copy_to_clipboard(text: str) -> bool:  # type: ignore[misc]
         return False
+
+    def _read_from_clipboard() -> str:  # type: ignore[misc]
+        return ""
 
 
 # ---------------------------------------------------------------------------

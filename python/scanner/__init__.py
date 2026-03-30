@@ -6,6 +6,7 @@ the main ``DNSScannerTUI`` application.
 
 from .constants import (
     _copy_to_clipboard,
+    _read_from_clipboard,
     logger,
     re,
 )
@@ -27,6 +28,7 @@ from .ip_streaming import IPStreamingMixin
 __all__ = [
     # Constants / platform
     "_copy_to_clipboard",
+    "_read_from_clipboard",
     "logger",
     "re",
     # Widgets

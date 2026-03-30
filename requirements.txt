@@ -21,6 +21,9 @@ httpx[socks]>=0.25.0
 # Advanced Logging
 loguru>=0.7.0
 
+# Clipboard Support for copy/paste in packaged desktop builds
+pyperclip>=1.8.0
+
 # Additional Dependencies (installed automatically with above)
 # rich>=13.0.0  (installed with textual)
 # typing-extensions>=4.0.0

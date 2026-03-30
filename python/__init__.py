@@ -5,7 +5,7 @@ This package provides a Terminal User Interface for scanning IP ranges
 to find working DNS servers with optional Slipstream proxy testing.
 """
 
-__version__ = "2.0.2"
+__version__ = "2.0.3"
 __author__ = "xullexer"
 
 from python.dnsscanner_tui import main, DNSScannerTUI

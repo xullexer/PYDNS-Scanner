@@ -21,22 +21,11 @@ from collections import deque
 from pathlib import Path
 from typing import Set
 
-
-def _resource_path(relative: str) -> Path:
-    """Resolve a bundled resource path.
-
-    When running as a PyInstaller one-file executable, data files are
-    extracted to ``sys._MEIPASS``.  In normal (source) mode falls back to
-    the directory that contains this module.
-    """
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return Path(sys._MEIPASS) / relative
-    return Path(__file__).parent / relative
-
 import dns.asyncresolver
 import dns.exception
 import dns.resolver
 import httpx
+from textual import events
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
@@ -51,11 +40,24 @@ from textual.widgets import (
     Select,
 )
 
+
+def _resource_path(relative: str) -> Path:
+    """Resolve a bundled resource path.
+
+    When running as a PyInstaller one-file executable, data files are
+    extracted to ``sys._MEIPASS``.  In normal (source) mode falls back to
+    the directory that contains this module.
+    """
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / relative
+    return Path(__file__).parent / relative
+
 # ── Scanner package imports ─────────────────────────────────────────────────
 try:
     from .scanner import (
         # Constants / platform
         _copy_to_clipboard,
+        _read_from_clipboard,
         re,
         logger,
         # Widgets
@@ -78,6 +80,7 @@ except ImportError:
     from scanner import (
         # Constants / platform
         _copy_to_clipboard,
+        _read_from_clipboard,
         re,
         logger,
         # Widgets
@@ -1372,6 +1375,29 @@ class DNSScannerTUI(
                     self._start_scan_from_form()
             except Exception as e:
                 logger.debug(f"Could not handle input submit: {e}")
+
+    def on_key(self, event: events.Key) -> None:
+        """Provide reliable clipboard paste for focused input widgets."""
+        if event.key not in ("ctrl+v", "shift+insert", "meta+v"):
+            return
+
+        focused = self.focused
+        if not isinstance(focused, Input):
+            return
+
+        pasted_text = _read_from_clipboard()
+        if not pasted_text:
+            return
+
+        try:
+            if hasattr(focused, "insert_text_at_cursor"):
+                focused.insert_text_at_cursor(pasted_text)
+            else:
+                focused.value = f"{focused.value}{pasted_text}"
+            event.stop()
+            self.notify("Pasted from clipboard", severity="information", timeout=1)
+        except Exception as e:
+            logger.debug(f"Clipboard paste error: {e}")
 
     def _pause_scan(self) -> None:
         """Pause the current scan."""
@@ -2946,14 +2972,21 @@ class DNSScannerTUI(
             row = table.get_row(row_key)
 
             if row and len(row) > 0:
+                ip_index = 1 if self.test_slipstream else 0
+                if len(row) <= ip_index:
+                    return
+
                 # Extract IP - remove any Rich markup
-                ip_raw = str(row[0])
+                ip_raw = str(row[ip_index])
                 # Strip Rich tags if present
                 ip = re.sub(r"\[.*?\]", "", ip_raw).strip()
 
                 if ip:
-                    _copy_to_clipboard(ip)
-                    self.notify(f"{ip} copied!", severity="information", timeout=2)
+                    copied = _copy_to_clipboard(ip)
+                    if copied:
+                        self.notify(f"{ip} copied!", severity="information", timeout=2)
+                    else:
+                        self.notify("Clipboard unavailable on this system", severity="warning", timeout=2)
 
                     # Show extra test details in log if available
                     details: list[str] = []

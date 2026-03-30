@@ -6,6 +6,12 @@
 
 ### 🇬🇧 English
 
+#### 🔥 v2.0.3 Hotfix
+
+- 🔧 Fixed **SlipNet config paste** in packaged TUI builds by adding reliable clipboard paste handling for input fields
+- 🔧 Fixed **double-click copy** on result rows so it copies the actual **IP address** instead of the proxy-status column
+- 🔧 Updated package / app version metadata for the `v2.0.3` release
+
 #### 🚀 v2.0.0
 
 **🌐 Three Scan Modes: Slipstream · SlipNet · DNS Scan**
@@ -57,6 +63,12 @@ Fully customizable scanning parameters:
 
 ### 🇮🇷 فارسی
 
+#### 🔥 نسخه ۲.۰.۳ هات‌فیکس
+
+- 🔧 مشکل **پیست کردن تنظیمات SlipNet** در نسخه‌های بسته‌بندی‌شده TUI رفع شد و پشتیبانی مطمئن‌تری برای paste در فیلدهای ورودی اضافه شد
+- 🔧 مشکل **کپی با دابل‌کلیک** در جدول نتایج رفع شد تا به‌جای ستون وضعیت پروکسی، خود **IP** کپی شود
+- 🔧 نسخه برنامه و پکیج برای انتشار `v2.0.3` به‌روزرسانی شد
+
 #### 🚀 نسخه ۲.۰.۰
 
 **🌐 سه حالت اسکن: Slipstream · SlipNet · DNS Scan**
@@ -107,6 +119,12 @@ Fully customizable scanning parameters:
 ---
 
 ### 🇨🇳 中文
+
+#### 🔥 v2.0.3 热修复
+
+- 🔧 修复打包版 TUI 中 **SlipNet 配置无法粘贴** 的问题，为输入框增加更可靠的剪贴板粘贴处理
+- 🔧 修复结果表中 **双击复制** 的问题，现会复制真实的 **IP 地址**，不再错误复制代理状态列
+- 🔧 已同步更新 `v2.0.3` 的程序与包版本元数据
 
 #### 🚀 v2.0.0
 

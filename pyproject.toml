@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pydns-scanner"
-version = "2.0.2"
+version = "2.0.3"
 description = "A high-performance DNS scanner with TUI, SlipNet/Slipstream tunnel testing, DNS tunnel-compatibility scoring (NS/TXT/RND/DPI/EDNS0/NXD), real-time ISP/DNSSEC/security checks, and Iran CIDR bundle"
 readme = "README.md"
 license = "MIT"
@@ -44,6 +44,7 @@ dependencies = [
     "dnspython>=2.4.0",
     "httpx[socks]>=0.25.0",
     "loguru>=0.7.0",
+    "pyperclip>=1.8.0",
 ]
 
 [project.optional-dependencies]
