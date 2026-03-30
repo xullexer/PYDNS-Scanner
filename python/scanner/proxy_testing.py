@@ -22,7 +22,8 @@ class ProxyTestingMixin:
         proxy_test_url, slipstream_processes, slipstream_tasks,
         bell_sound_enabled, _stats_widget, _passed_count, _failed_count,
         table_needs_rebuild,
-        active_protocol, slipnet_manager, slipnet_url
+        active_protocol, slipnet_manager, slipnet_url,
+        min_dns_type_score, proxy_test_retries
     """
 
     async def _queue_slipstream_test(self, dns_ip: str) -> None:
@@ -42,13 +43,16 @@ class ProxyTestingMixin:
         if self.proxy_results.get(dns_ip) == "Skip":
             return
 
-        # Skip if DNS type score < 4 — not usable as a tunnel resolver
+        # Skip low DNS-type scores using configurable threshold.
+        # 0 means use default threshold (4).
+        min_score_cfg = int(getattr(self, "min_dns_type_score", 0) or 0)
+        min_score = 4 if min_score_cfg == 0 else max(1, min(6, min_score_cfg))
         dns_types = self.dns_types_results.get(dns_ip, {})
         dns_score = sum(1 for v in dns_types.values() if v)
-        if dns_types and dns_score < 4:
+        if dns_types and dns_score < min_score:
             self.proxy_results[dns_ip] = "Skip"
             self._log(
-                f"[yellow]⚠ {dns_ip}: DNS type score {dns_score}/6 < 4 "
+                f"[yellow]⚠ {dns_ip}: DNS type score {dns_score}/6 < {min_score} "
                 f"→ skipping proxy test[/yellow]"
             )
             self._update_table_row(dns_ip)
@@ -65,11 +69,28 @@ class ProxyTestingMixin:
             port = self.available_ports.popleft()
 
             try:
+                attempts = max(1, min(5, int(getattr(self, "proxy_test_retries", 1) or 1)))
                 self.proxy_results[dns_ip] = "Testing"
                 self._update_table_row(dns_ip)
                 self._log(f"[cyan]Testing {dns_ip} with {protocol} on port {port}...[/cyan]")
 
-                result, proxy_latency = await self._test_slipstream_proxy(dns_ip, port)
+                result: str = "Failed"
+                proxy_latency: float | None = None
+
+                for attempt in range(1, attempts + 1):
+                    if attempt > 1:
+                        self._log(
+                            f"[yellow]{dns_ip}: proxy test retry {attempt}/{attempts} "
+                            f"— restarting tunnel…[/yellow]"
+                        )
+                        await asyncio.sleep(2.0)
+                        self.proxy_results[dns_ip] = "Testing"
+                        self._update_table_row(dns_ip)
+
+                    result, proxy_latency = await self._test_slipstream_proxy(dns_ip, port)
+
+                    if result == "Success":
+                        break
 
                 if result == "Success" and proxy_latency is not None:
                     self.proxy_results[dns_ip] = f"Success|{proxy_latency:.0f}ms"
@@ -97,7 +118,7 @@ class ProxyTestingMixin:
                         from .utils import _play_bell_sound
                         _play_bell_sound()
                 else:
-                    self._log(f"[red]✗ Proxy test FAILED: {dns_ip}[/red]")
+                    self._log(f"[red]✗ Proxy test FAILED: {dns_ip} (all {attempts} attempt(s) exhausted)[/red]")
 
                 # Always trigger a sort rebuild so Success rows move to top
                 # and Failed/Skip rows rank correctly below in-progress rows
@@ -224,93 +245,87 @@ class ProxyTestingMixin:
             self._debug_log(f"TEST_URL ip={dns_ip} url={TEST_URL}")
             self._debug_log(f"SUCCESS_CODES ip={dns_ip} codes={SUCCESS_CODES}")
 
-            # Try SOCKS5 first — slipstream is a SOCKS5 proxy;
-            # HTTP CONNECT tunnels are not supported and always fail.
-            # Wrap with asyncio.wait_for as a hard outer timeout because
-            # httpx's internal timeout does not always fire for SOCKS5/socksio.
-            if not test_success:
-                logger.info(f"[{dns_ip}] Testing SOCKS5 proxy at {socks5_url_log}")
-                hard_timeout = self.slipstream_timeout + 5
-                self._debug_log(f"SOCKS5_HARD_TIMEOUT ip={dns_ip} hard_timeout={hard_timeout}s inner_timeout={self.slipstream_timeout}s")
-                socks_client = None
-                start_time = time.time()
-                try:
-                    async def _do_socks5_test():
-                        nonlocal socks_client
-                        socks_client = httpx.AsyncClient(
-                            proxy=socks5_url,
-                            timeout=self.slipstream_timeout,
-                            follow_redirects=True,
-                            verify=False,
-                        )
-                        try:
-                            return await socks_client.get(TEST_URL)
-                        finally:
-                            await socks_client.aclose()
-                            socks_client = None
+            # Single SOCKS5 attempt per call — the retry loop that restarts
+            # the full tunnel lives in _queue_slipstream_test, so each retry
+            # gets a brand-new tunnel process and a clean port state.
+            logger.info(f"[{dns_ip}] Testing SOCKS5 proxy at {socks5_url_log}")
+            hard_timeout = self.slipstream_timeout + 5
+            self._debug_log(
+                f"SOCKS5_HARD_TIMEOUT ip={dns_ip} "
+                f"hard_timeout={hard_timeout}s inner_timeout={self.slipstream_timeout}s"
+            )
 
-                    response = await asyncio.wait_for(
-                        _do_socks5_test(), timeout=hard_timeout
+            socks_client = None
+            start_time = time.time()
+            try:
+                async def _do_socks5_test():
+                    nonlocal socks_client
+                    socks_client = httpx.AsyncClient(
+                        proxy=socks5_url,
+                        timeout=self.slipstream_timeout,
+                        follow_redirects=True,
+                        verify=False,
                     )
-                    elapsed = time.time() - start_time
-                    logger.debug(
-                        f"[{dns_ip}] SOCKS5 proxy status={response.status_code} "
-                        f"in {elapsed:.2f}s"
-                    )
-                    self._debug_log(
-                        f"SOCKS5_RESPONSE ip={dns_ip} status={response.status_code} "
-                        f"elapsed={elapsed:.3f}s elapsed_ms={elapsed*1000:.0f}ms "
-                        f"expected_codes={SUCCESS_CODES} "
-                        f"result={'PASS' if response.status_code in SUCCESS_CODES else 'FAIL_WRONG_STATUS'}"
-                    )
-                    if response.status_code in SUCCESS_CODES:
-                        test_success = True
-                        proxy_latency_ms = elapsed * 1000
-                        logger.info(
-                            f"[{dns_ip}] SOCKS5 proxy test PASSED "
-                            f"(status {response.status_code}, {elapsed:.2f}s)"
-                        )
-                        self._log(
-                            f"[green]{dns_ip}: SOCKS5 proxy test passed "
-                            f"(status {response.status_code})[/green]"
-                        )
-                    else:
-                        logger.warning(
-                            f"[{dns_ip}] SOCKS5 proxy unexpected status: "
-                            f"{response.status_code}"
-                        )
-                except asyncio.TimeoutError:
-                    elapsed = time.time() - start_time
-                    logger.error(
-                        f"[{dns_ip}] SOCKS5 proxy test timed out after {elapsed:.1f}s"
-                    )
-                    self._debug_log(
-                        f"SOCKS5_TIMEOUT ip={dns_ip} elapsed={elapsed:.3f}s "
-                        f"hard_timeout={hard_timeout}s reason=asyncio.TimeoutError (outer wait_for expired)"
+                    try:
+                        return await socks_client.get(TEST_URL)
+                    finally:
+                        await socks_client.aclose()
+                        socks_client = None
+
+                response = await asyncio.wait_for(_do_socks5_test(), timeout=hard_timeout)
+                elapsed = time.time() - start_time
+                logger.debug(
+                    f"[{dns_ip}] SOCKS5 proxy status={response.status_code} "
+                    f"in {elapsed:.2f}s"
+                )
+                self._debug_log(
+                    f"SOCKS5_RESPONSE ip={dns_ip} status={response.status_code} "
+                    f"elapsed={elapsed:.3f}s elapsed_ms={elapsed*1000:.0f}ms expected_codes={SUCCESS_CODES} "
+                    f"result={'PASS' if response.status_code in SUCCESS_CODES else 'FAIL_WRONG_STATUS'}"
+                )
+                if response.status_code in SUCCESS_CODES:
+                    test_success = True
+                    proxy_latency_ms = elapsed * 1000
+                    logger.info(
+                        f"[{dns_ip}] SOCKS5 proxy test PASSED "
+                        f"(status {response.status_code}, {elapsed:.2f}s)"
                     )
                     self._log(
-                        f"[red]{dns_ip}: SOCKS5 proxy test timed out[/red]"
+                        f"[green]{dns_ip}: SOCKS5 proxy test passed "
+                        f"(status {response.status_code})[/green]"
                     )
-                except Exception as socks_err:
-                    elapsed = time.time() - start_time
-                    logger.error(
-                        f"[{dns_ip}] SOCKS5 proxy test failed: "
-                        f"{type(socks_err).__name__}: {socks_err}"
+                else:
+                    logger.warning(
+                        f"[{dns_ip}] SOCKS5 proxy unexpected status: "
+                        f"{response.status_code}"
                     )
-                    self._debug_log(
-                        f"SOCKS5_EXCEPTION ip={dns_ip} elapsed={elapsed:.3f}s "
-                        f"type={type(socks_err).__name__} msg={socks_err!r}"
-                    )
-                    self._log(
-                        f"[red]{dns_ip}: SOCKS5 proxy test failed[/red]"
-                    )
-                finally:
-                    # Ensure the SOCKS client is closed even if wait_for cancelled
-                    if socks_client is not None:
-                        try:
-                            await socks_client.aclose()
-                        except Exception:
-                            pass
+            except asyncio.TimeoutError:
+                elapsed = time.time() - start_time
+                logger.error(
+                    f"[{dns_ip}] SOCKS5 proxy test timed out after {elapsed:.1f}s"
+                )
+                self._debug_log(
+                    f"SOCKS5_TIMEOUT ip={dns_ip} elapsed={elapsed:.3f}s "
+                    f"hard_timeout={hard_timeout}s reason=asyncio.TimeoutError"
+                )
+                self._log(f"[red]{dns_ip}: SOCKS5 proxy test timed out after {elapsed:.1f}s[/red]")
+            except Exception as socks_err:
+                elapsed = time.time() - start_time
+                logger.error(
+                    f"[{dns_ip}] SOCKS5 proxy test failed: "
+                    f"{type(socks_err).__name__}: {socks_err}"
+                )
+                self._debug_log(
+                    f"SOCKS5_EXCEPTION ip={dns_ip} elapsed={elapsed:.3f}s "
+                    f"type={type(socks_err).__name__} msg={socks_err!r}"
+                )
+                self._log(f"[red]{dns_ip}: SOCKS5 proxy test failed[/red]")
+            finally:
+                if socks_client is not None:
+                    try:
+                        await socks_client.aclose()
+                    except Exception:
+                        pass
 
             final_result = "Success" if test_success else "Failed"
             logger.info(f"[{dns_ip}] Final result: {final_result}")
@@ -341,3 +356,17 @@ class ProxyTestingMixin:
                         self.slipstream_processes.remove(process)
                 except (ProcessLookupError, OSError) as e:
                     logger.debug(f"Process cleanup for {dns_ip}: {e}")
+                finally:
+                    # IMPORTANT: explicitly close inherited pipe handles.
+                    # On long scans, relying on GC can leak enough descriptors
+                    # to hit Windows select() limits (too many file descriptors).
+                    try:
+                        if process.stdout:
+                            process.stdout.close()
+                    except Exception:
+                        pass
+                    try:
+                        if process.stderr:
+                            process.stderr.close()
+                    except Exception:
+                        pass

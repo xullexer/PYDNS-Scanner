@@ -6,7 +6,16 @@
 
 ### 🇬🇧 English
 
-#### 🔥 v2.0.3 Hotfix
+#### � v2.0.4
+
+- 🐛 Fixed **crash on long-running scans** caused by file descriptor leak — subprocess pipe handles are now explicitly closed after each proxy test, preventing the Windows `select()` handle limit from being exceeded
+- ✨ Added **Clear button** next to the SlipNet URL input for quick one-click reset
+- ✨ Added **Minimum DNS Type Score** setting in the Advanced section — configure the minimum score (1–6) a DNS server must achieve before it qualifies for proxy testing (default: 4)
+- ✨ Added **Proxy Test Try Number** setting in the Advanced section — set how many times (1–5) to retry the full proxy test (tunnel + HTTP) before marking a server as failed
+- 🔧 **Improved proxy testing retry logic** — each retry now restarts the entire tunnel process from scratch rather than only retrying the HTTP request, giving timed-out servers a genuine second chance
+- 🔧 Fixed default expected HTTP status code staying at **200** instead of being auto-overridden to 204 when using a `gen_204` test URL
+
+#### �🔥 v2.0.3 Hotfix
 
 - 🔧 Fixed **SlipNet config paste** in packaged TUI builds by adding reliable clipboard paste handling for input fields
 - 🔧 Fixed **double-click copy** on result rows so it copies the actual **IP address** instead of the proxy-status column
@@ -63,7 +72,16 @@ Fully customizable scanning parameters:
 
 ### 🇮🇷 فارسی
 
-#### 🔥 نسخه ۲.۰.۳ هات‌فیکس
+#### � نسخه ۲.۰.۴
+
+- 🐛 رفع **کرش در اسکن‌های طولانی** ناشی از نشت file descriptor — هندل‌های pipe پس از هر تست پروکسی اکنون به صورت صریح بسته می‌شوند تا از رسیدن به محدودیت handle ویندوز جلوگیری شود
+- ✨ افزودن **دکمه Clear** کنار فیلد URL SlipNet برای پاک‌سازی سریع با یک کلیک
+- ✨ افزودن تنظیم **حداقل امتیاز DNS Type** در بخش Advanced — حداقل امتیاز لازم (۱ تا ۶) برای قرار گرفتن سرور DNS در صف تست پروکسی (پیش‌فرض: ۴)
+- ✨ افزودن تنظیم **تعداد تلاش تست پروکسی** در بخش Advanced — تعداد دفعات تکرار (۱ تا ۵) کل تست پروکسی (تونل + HTTP) قبل از علامت‌گذاری به عنوان ناموفق
+- 🔧 **بهبود منطق retry تست پروکسی** — هر بار تلاش مجدد، کل فرآیند تونل را از ابتدا شروع می‌کند نه اینکه فقط درخواست HTTP تکرار شود
+- 🔧 رفع مشکل کد وضعیت HTTP پیش‌فرض که به اشتباه برای URL نوع `gen_204` به ۲۰۴ تغییر می‌کرد؛ اکنون مقدار **200** حفظ می‌شود
+
+#### �🔥 نسخه ۲.۰.۳ هات‌فیکس
 
 - 🔧 مشکل **پیست کردن تنظیمات SlipNet** در نسخه‌های بسته‌بندی‌شده TUI رفع شد و پشتیبانی مطمئن‌تری برای paste در فیلدهای ورودی اضافه شد
 - 🔧 مشکل **کپی با دابل‌کلیک** در جدول نتایج رفع شد تا به‌جای ستون وضعیت پروکسی، خود **IP** کپی شود
@@ -120,7 +138,16 @@ Fully customizable scanning parameters:
 
 ### 🇨🇳 中文
 
-#### 🔥 v2.0.3 热修复
+#### � v2.0.4
+
+- 🐛 修复 **长时间扫描崩溃** 问题：子进程管道句柄现在在每次代理测试后被显式关闭，防止 Windows `select()` 句柄数量超限
+- ✨ 在 SlipNet URL 输入框旁新增 **Clear（清除）按钮**，一键快速清空
+- ✨ 在高级设置中新增 **最低 DNS 类型评分** 选项 — 设置 DNS 服务器参与代理测试所需的最低评分（1–6，默认值：4）
+- ✨ 在高级设置中新增 **代理测试重试次数** 选项 — 设置将服务器标记为失败前的完整代理测试（隧道 + HTTP）重试次数（1–5）
+- 🔧 **改进代理测试重试逻辑** — 每次重试都会从头重启完整隧道进程，而非仅重试 HTTP 请求，让超时的服务器获得真正的第二次机会
+- 🔧 修复默认期望 HTTP 状态码在使用 `gen_204` 测试 URL 时被自动改为 204 的问题，现在默认保持 **200**
+
+#### �🔥 v2.0.3 热修复
 
 - 🔧 修复打包版 TUI 中 **SlipNet 配置无法粘贴** 的问题，为输入框增加更可靠的剪贴板粘贴处理
 - 🔧 修复结果表中 **双击复制** 的问题，现会复制真实的 **IP 地址**，不再错误复制代理状态列

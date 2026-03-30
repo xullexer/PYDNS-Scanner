@@ -403,6 +403,13 @@ class DNSScannerTUI(
         background: #2ea043;
     }
 
+    #clear-slipnet-btn {
+        width: 10;
+        min-width: 10;
+        height: 3;
+        margin: 0 0 0 1;
+    }
+
     DataTable {
         height: 100%;
         background: #161b22;
@@ -519,8 +526,10 @@ class DNSScannerTUI(
         self.dns_timeout: float = 2.0  # Seconds for DNS test timeout
         self.slipstream_timeout: float = 15.0  # Seconds for slipstream tunnel + HTTP test
         self.proxy_test_url: str = "https://www.google.com/gen_204"
-        self.proxy_success_code: int = 204  # Expected HTTP status code for proxy test success
+        self.proxy_success_code: int = 200  # Expected HTTP status code for proxy test success
         self.proxy_ping_threshold: int = 800  # 0 = test all; otherwise only ping <= this ms
+        self.min_dns_type_score: int = 0  # 0 = default behavior (>=4), otherwise 1..6
+        self.proxy_test_retries: int = 1  # Number of proxy test attempts per DNS (1..5)
 
         # Experimental OS MTU
         self.os_mtu: int = 0                   # 0 = disabled
@@ -697,11 +706,13 @@ class DNSScannerTUI(
                     with Horizontal(classes="form-row"):
                         with Vertical(classes="form-field"):
                             yield Label("SlipNet URL:", classes="field-label")
-                            yield Input(
-                                placeholder="slipnet://BASE64...",
-                                id="input-slipnet-url",
-                                classes="form-input",
-                            )
+                            with Horizontal(classes="form-row"):
+                                yield Input(
+                                    placeholder="slipnet://BASE64...",
+                                    id="input-slipnet-url",
+                                    classes="form-input",
+                                )
+                                yield Button("Clear", id="clear-slipnet-btn", variant="default")
 
                 with Container(id="socks5-auth-container"):
                     with Horizontal(classes="form-row"):
@@ -782,7 +793,7 @@ class DNSScannerTUI(
                                 value="https://www.google.com/gen_204",
                             )
                         with Vertical(classes="form-field"):
-                            yield Label("Expected Status Code (custom URL only):", classes="field-label")
+                            yield Label("Expected Status Code:", classes="field-label")
                             yield Input(
                                 placeholder="200",
                                 id="input-proxy-success-code",
@@ -810,6 +821,21 @@ class DNSScannerTUI(
                                 placeholder="0",
                                 id="input-shuffle-threshold",
                                 value="0",
+                            )
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="form-field"):
+                            yield Label("Minimum DNS Type Score for Proxy Test (0=default(4), 1-6):", classes="field-label")
+                            yield Input(
+                                placeholder="0",
+                                id="input-min-dns-score",
+                                value="0",
+                            )
+                        with Vertical(classes="form-field"):
+                            yield Label("Proxy Test Try Number (1-5):", classes="field-label")
+                            yield Input(
+                                placeholder="1",
+                                id="input-proxy-retries",
+                                value="1",
                             )
                     with Horizontal(classes="form-row"):
                         with Vertical(classes="form-field"):
@@ -983,6 +1009,10 @@ class DNSScannerTUI(
                 self.query_one("#input-proxy-success-code", Input).value = str(config["proxy_success_code"])
             if config.get("proxy_ping_threshold") is not None:
                 self.query_one("#input-proxy-ping-threshold", Input).value = str(config["proxy_ping_threshold"])
+            if config.get("min_dns_type_score") is not None:
+                self.query_one("#input-min-dns-score", Input).value = str(config["min_dns_type_score"])
+            if config.get("proxy_test_retries") is not None:
+                self.query_one("#input-proxy-retries", Input).value = str(config["proxy_test_retries"])
             if config.get("shuffle_threshold"):
                 self.query_one("#input-shuffle-threshold", Input).value = str(config["shuffle_threshold"])
             if config.get("proxy_parallel") is not None:
@@ -1053,6 +1083,20 @@ class DNSScannerTUI(
                 try:
                     if process and hasattr(process, "kill"):
                         process.kill()
+                        try:
+                            process.wait(timeout=1)
+                        except Exception:
+                            pass
+                        try:
+                            if getattr(process, "stdout", None):
+                                process.stdout.close()
+                        except Exception:
+                            pass
+                        try:
+                            if getattr(process, "stderr", None):
+                                process.stderr.close()
+                        except Exception:
+                            pass
                 except (ProcessLookupError, OSError) as e:
                     logger.debug(f"Process already terminated or inaccessible: {e}")
             self.slipstream_processes.clear()
@@ -1219,6 +1263,14 @@ class DNSScannerTUI(
                 self._start_scan_from_form()
             elif event.button.id == "exit-btn":
                 self.action_quit()
+            elif event.button.id == "clear-slipnet-btn":
+                try:
+                    slipnet_input = self.query_one("#input-slipnet-url", Input)
+                    slipnet_input.value = ""
+                    slipnet_input.focus()
+                    self.notify("SlipNet URL cleared", severity="information", timeout=1)
+                except Exception as e:
+                    logger.debug(f"Could not clear SlipNet URL input: {e}")
             elif event.button.id == "pause-btn":
                 self._pause_scan()
                 # Rebuild table when paused so user sees sorted results
@@ -1720,18 +1772,13 @@ class DNSScannerTUI(
         except Exception:
             self.proxy_test_url = "https://www.google.com/gen_204"
 
-        # If URL is the default gen_204, lock to 204; otherwise use the user's custom code
-        DEFAULT_URL = "https://www.google.com/gen_204"
-        if self.proxy_test_url == DEFAULT_URL:
-            self.proxy_success_code = 204
-        else:
-            try:
-                code_str = self.query_one("#input-proxy-success-code", Input).value.strip()
-                self.proxy_success_code = int(code_str) if code_str else 200
-                if self.proxy_success_code <= 0:
-                    self.proxy_success_code = 200
-            except (ValueError, Exception):
+        try:
+            code_str = self.query_one("#input-proxy-success-code", Input).value.strip()
+            self.proxy_success_code = int(code_str) if code_str else 200
+            if self.proxy_success_code <= 0:
                 self.proxy_success_code = 200
+        except (ValueError, Exception):
+            self.proxy_success_code = 200
 
         try:
             threshold_str = self.query_one("#input-proxy-ping-threshold", Input).value.strip()
@@ -1750,6 +1797,20 @@ class DNSScannerTUI(
                 self.preset_auto_shuffle = True
         except (ValueError, Exception):
             pass
+
+        try:
+            min_score_str = self.query_one("#input-min-dns-score", Input).value.strip()
+            raw_min_score = int(min_score_str) if min_score_str else 0
+            self.min_dns_type_score = max(0, min(6, raw_min_score))
+        except (ValueError, Exception):
+            self.min_dns_type_score = 0
+
+        try:
+            retries_str = self.query_one("#input-proxy-retries", Input).value.strip()
+            raw_retries = int(retries_str) if retries_str else 1
+            self.proxy_test_retries = max(1, min(5, raw_retries))
+        except (ValueError, Exception):
+            self.proxy_test_retries = 1
 
         try:
             parallel_str = self.query_one("#input-proxy-parallel", Input).value.strip()
@@ -1803,6 +1864,8 @@ class DNSScannerTUI(
             "proxy_test_url": self.proxy_test_url,
             "proxy_success_code": self.proxy_success_code,
             "proxy_ping_threshold": self.proxy_ping_threshold,
+            "min_dns_type_score": self.min_dns_type_score,
+            "proxy_test_retries": self.proxy_test_retries,
             "shuffle_threshold": self.preset_shuffle_threshold,
             "proxy_parallel": self.slipstream_max_concurrent,
             "os_mtu": self.os_mtu,
@@ -2640,8 +2703,10 @@ class DNSScannerTUI(
             proto_name = getattr(self, "active_protocol", "slipstream")
             num_tasks = len(self.slipstream_tasks)
             # Scale timeout: each test can take up to proxy_timeout + overhead,
-            # limited by semaphore concurrency.  Give generous per-batch time.
-            per_batch_time = getattr(self, "slipstream_timeout", 15) + 10
+            # limited by semaphore concurrency.  Multiply by retry count so
+            # the wait is long enough for all retries to finish.
+            retry_count = max(1, min(5, int(getattr(self, "proxy_test_retries", 1) or 1)))
+            per_batch_time = (getattr(self, "slipstream_timeout", 15) + 10) * retry_count
             max_concurrent = getattr(self, "slipstream_max_concurrent", 3)
             batches = (num_tasks + max_concurrent - 1) // max_concurrent
             dynamic_timeout = max(120.0, batches * per_batch_time)
