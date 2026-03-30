@@ -99,18 +99,20 @@ class ExtraTestsMixin:
                         f"→ Filtered[/yellow]"
                     )
 
-                # Safety-net: skip proxy if DNS type score < 4.
+                # Safety-net: skip proxy if DNS type score below threshold.
                 # Primary enforcement is in _queue_slipstream_test (before semaphore),
                 # but this catches any edge case where the task hasn't run yet.
+                min_score_cfg = int(getattr(self, "min_dns_type_score", 0) or 0)
+                min_score = 4 if min_score_cfg == 0 else max(1, min(6, min_score_cfg))
                 dns_types = self.dns_types_results.get(dns_ip, {})
                 dns_score = sum(1 for v in dns_types.values() if v)
-                if dns_types and dns_score < 4:
+                if dns_types and dns_score < min_score:
                     if self.test_slipstream and self.proxy_results.get(dns_ip) in (
                         "Pending", "Testing", "N/A",
                     ):
                         self.proxy_results[dns_ip] = "Skip"
                         self._log(
-                            f"[yellow]⚠ {dns_ip}: DNS type score {dns_score}/6 < 4 "
+                            f"[yellow]⚠ {dns_ip}: DNS type score {dns_score}/6 < {min_score} "
                             f"→ skipping proxy test[/yellow]"
                         )
 

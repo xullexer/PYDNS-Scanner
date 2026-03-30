@@ -1742,6 +1742,9 @@ class DNSScannerTUI(
         else:
             try:
                 self.concurrency = int(concurrency_str)
+                # Hard cap on Windows: SelectorEventLoop select() supports max ~512 fds
+                if sys.platform == "win32":
+                    self.concurrency = min(self.concurrency, 440)
             except ValueError:
                 optimal = self._get_optimal_concurrency()
                 self.concurrency = int(optimal * 0.9)
